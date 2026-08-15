@@ -40,8 +40,8 @@ const builder = path.join(__dirname, '..', 'node_modules', 'electron-builder', '
 const args = mode === 'pack'
   ? ['--dir']
   : targetPlatform === 'win32'
-    ? ['--win', 'portable']
+    ? ['--win', 'portable', '--publish', 'never']
     : targetPlatform === 'linux'
-      ? ['--linux', 'AppImage', 'deb']
-      : ['--mac', 'dmg', 'zip'];
+      ? ['--linux', 'AppImage', 'deb', '--publish', 'never']
+      : ['--mac', 'dmg', 'zip', '--publish', 'never'];
 run(process.execPath, [builder, ...args]);
