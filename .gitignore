@@ -1,0 +1,23 @@
+# Dependencies and package output
+node_modules/
+dist/
+dist-*/
+release/
+*.log
+
+# Generated native and vendor binaries
+native/**/bin/
+native/**/obj/
+build/*
+!build/icon.png
+!build/icon.ico
+
+# Local diagnostics and editor state
+artifacts/
+/favicon.png
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.user
+*.suo

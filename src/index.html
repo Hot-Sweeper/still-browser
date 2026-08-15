@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: https: http:;">
+  <title>Still</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="webviews" aria-label="Browser content"></div>
+  <div id="page-transition-stage" aria-hidden="true" hidden></div>
+  <div class="page-edge-fade left" aria-hidden="true"></div>
+  <div class="page-edge-fade right" aria-hidden="true"></div>
+  <button id="new-slot-edge" type="button" aria-label="Open a new slot" aria-hidden="true" tabindex="-1">
+    <span aria-hidden="true">+</span>
+  </button>
+  <div id="tab-dock" aria-label="Tab dock" hidden>
+    <div id="tab-dock-icons"></div>
+  </div>
+
+  <header id="chrome" aria-label="Browser controls">
+    <div class="slot-row" id="slot-row" aria-label="Five browsing slots"></div>
+    <div class="top-controls" aria-label="Window controls">
+      <button class="top-control utility-button" id="utility-button" title="Utility" aria-label="Utility">
+        <span class="utility-icon-stage" aria-hidden="true"></span>
+      </button>
+      <button class="top-control" id="minimize" title="Minimize" aria-label="Minimize">−</button>
+      <button class="top-control" id="maximize" title="Fullscreen" aria-label="Fullscreen">□</button>
+      <button class="top-control danger" id="close-window" title="Close" aria-label="Close">×</button>
+    </div>
+    <div class="utility-panel" id="utility-panel" hidden></div>
+  </header>
+
+  <section id="permission-prompt" role="dialog" aria-modal="true" aria-labelledby="permission-prompt-title" hidden>
+    <div id="permission-prompt-icons" aria-hidden="true"></div>
+    <div class="permission-prompt-copy">
+      <strong id="permission-prompt-title"></strong>
+      <span>Still will remember your choice for this website.</span>
+    </div>
+    <div class="permission-prompt-actions">
+      <button id="permission-block" type="button">Block</button>
+      <button id="permission-allow" type="button">Allow</button>
+    </div>
+  </section>
+
+  <div id="slot-replacement-backdrop" hidden>
+    <section id="slot-replacement-modal" role="dialog" aria-modal="true" aria-labelledby="slot-replacement-title">
+      <div class="replacement-heading">
+        <div>
+          <h2 id="slot-replacement-title">Choose a slot</h2>
+          <p>The external link needs one of your five active slots.</p>
+        </div>
+        <button id="slot-replacement-cancel" type="button" aria-label="Cancel">×</button>
+      </div>
+      <div id="slot-replacement-url"></div>
+      <div id="slot-replacement-list"></div>
+    </section>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="renderer.js"></script>
+</body>
+</html>
