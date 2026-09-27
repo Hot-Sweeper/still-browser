@@ -1,18 +1,42 @@
 const form = document.querySelector('#search-form');
 const input = document.querySelector('#search-input');
 const panel = document.querySelector('#suggestions');
+const editorPageUrl = new URL('editor.html', location.href).href;
+const learnPageUrl = new URL('learn.html', location.href).href;
 
 let suggestions = [];
 let selectedIndex = -1;
 let requestNumber = 0;
+let searchBaseUrl = '';
+
+function focusSearchInput() {
+  input.focus({ preventScroll: true });
+}
+
+requestAnimationFrame(focusSearchInput);
+window.addEventListener('pageshow', focusSearchInput);
+
+window.stillStart.searchBaseUrl().then((url) => {
+  if (/^http:\/\/127\.0\.0\.1:\d+\/$/.test(url)) searchBaseUrl = url;
+}).catch(() => {});
+
+function defaultSearchUrl(query) {
+  if (!searchBaseUrl) return '';
+  const target = new URL('search', searchBaseUrl);
+  target.searchParams.set('q', query);
+  return target.href;
+}
 
 function normalizeInput(value) {
   const query = value.trim();
   if (!query) return '';
+  const normalizedQuery = query.toLocaleLowerCase();
+  if (normalizedQuery === 'editor') return editorPageUrl;
+  if (normalizedQuery === 'learn' || normalizedQuery === 'still learn') return learnPageUrl;
   if (/^https?:\/\//i.test(query)) return query;
   if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(query)) return `http://${query}`;
   if (/^[\w.-]+\.[a-z]{2,}(:\d+)?(\/.*)?$/i.test(query)) return `https://${query}`;
-  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  return defaultSearchUrl(query);
 }
 
 function navigate(url) {
@@ -57,9 +81,20 @@ function renderSuggestions(query) {
   search.type = 'button';
   search.className = 'suggestion search-option';
   const title = document.createElement('span');
-  title.textContent = `Search Google for “${query}”`;
+  const normalizedQuery = query.toLocaleLowerCase();
+  const opensEditor = normalizedQuery === 'editor';
+  const opensLearn = normalizedQuery === 'learn' || normalizedQuery === 'still learn';
+  title.textContent = opensEditor
+    ? 'Open blank editor'
+    : opensLearn
+      ? 'Open Still Learn'
+      : `Search Still Search for “${query}”`;
   const label = document.createElement('small');
-  label.textContent = 'Google search';
+  label.textContent = opensEditor
+    ? 'Local writing page'
+    : opensLearn
+      ? 'Your selected YouTube channels only'
+      : 'Private local metasearch';
   search.append(title, label);
   search.addEventListener('mousedown', (event) => event.preventDefault());
   search.addEventListener('click', () => navigate(normalizeInput(query)));
@@ -88,6 +123,15 @@ async function updateSuggestions() {
 }
 
 function submitSearch() {
+  const normalizedInput = input.value.trim().toLocaleLowerCase();
+  if (normalizedInput === 'editor') {
+    navigate(editorPageUrl);
+    return;
+  }
+  if (normalizedInput === 'learn' || normalizedInput === 'still learn') {
+    navigate(learnPageUrl);
+    return;
+  }
   const selected = selectedIndex >= 0 ? suggestions[selectedIndex] : null;
   const useHistory = selected && selected.score >= 620;
   navigate(useHistory ? selected.url : normalizeInput(input.value));

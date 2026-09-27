@@ -13,14 +13,17 @@ internal static class Program
     private const int VkControl = 0x11;
     private const int VkLWin = 0x5B;
     private const int VkRWin = 0x5C;
+    private const int DwmwaBorderColor = 34;
     private const uint XButton1 = 1;
     private const uint XButton2 = 2;
+    private const uint OledBlack = 0x00000000;
 
     private static readonly LowLevelMouseProc MouseProc = HandleMouse;
     private static IntPtr _mouseHook;
     private static uint _messageThreadId;
     private static Timer? _parentTimer;
     private static int _parentProcessId;
+    private static IntPtr _styledWindow;
 
     private static int Main(string[] args)
     {
@@ -28,7 +31,8 @@ internal static class Program
         if (args.Length > 0 && int.TryParse(args[0], out var parentPid))
         {
             _parentProcessId = parentPid;
-            _parentTimer = new Timer(_ => StopIfParentExited(parentPid), null, 1000, 1000);
+            StyleParentWindow(parentPid);
+            _parentTimer = new Timer(_ => MonitorParent(parentPid), null, 250, 1000);
         }
 
         var module = GetModuleHandle(null);
@@ -51,11 +55,16 @@ internal static class Program
         return 0;
     }
 
-    private static void StopIfParentExited(int parentPid)
+    private static void MonitorParent(int parentPid)
     {
         try
         {
-            if (!Process.GetProcessById(parentPid).HasExited) return;
+            using var parent = Process.GetProcessById(parentPid);
+            if (!parent.HasExited)
+            {
+                StyleParentWindow(parent);
+                return;
+            }
         }
         catch
         {
@@ -63,6 +72,31 @@ internal static class Program
         }
 
         PostThreadMessage(_messageThreadId, WmQuit, UIntPtr.Zero, IntPtr.Zero);
+    }
+
+    private static void StyleParentWindow(int parentPid)
+    {
+        try
+        {
+            using var parent = Process.GetProcessById(parentPid);
+            StyleParentWindow(parent);
+        }
+        catch
+        {
+            // The first attempt can run before Electron has created its window.
+        }
+    }
+
+    private static void StyleParentWindow(Process parent)
+    {
+        parent.Refresh();
+        var window = parent.MainWindowHandle;
+        if (window == IntPtr.Zero || window == _styledWindow) return;
+        var borderColor = OledBlack;
+        if (DwmSetWindowAttribute(window, DwmwaBorderColor, ref borderColor, sizeof(uint)) == 0)
+        {
+            _styledWindow = window;
+        }
     }
 
     private static IntPtr HandleMouse(int code, IntPtr message, IntPtr data)
@@ -170,4 +204,7 @@ internal static class Program
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref uint value, int size);
 }

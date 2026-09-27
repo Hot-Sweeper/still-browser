@@ -101,7 +101,7 @@ async function loadOperaExtensions(browsingSession, extensions) {
       continue;
     }
     try {
-      const loaded = await browsingSession.extensions.loadExtension(extension.path);
+      const loaded = await browsingSession.extensions.loadExtension(extension.path, { allowFileAccess: false });
       report.loaded.push({ name: extension.name, version: loaded.version, id: loaded.id });
     } catch (error) {
       report.failed.push({ name: extension.name, reason: error.message });

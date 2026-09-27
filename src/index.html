@@ -9,6 +9,7 @@
 </head>
 <body>
   <div id="webviews" aria-label="Browser content"></div>
+  <div id="page-loading-cover" aria-hidden="true" hidden></div>
   <div id="page-transition-stage" aria-hidden="true" hidden></div>
   <div class="page-edge-fade left" aria-hidden="true"></div>
   <div class="page-edge-fade right" aria-hidden="true"></div>
@@ -58,7 +59,11 @@
     </section>
   </div>
 
-  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="toast" role="status" aria-live="polite">
+    <span id="toast-message"></span>
+    <button id="toast-action" type="button" hidden></button>
+    <button id="toast-close" type="button" aria-label="Dismiss notification" title="Dismiss" hidden>×</button>
+  </div>
   <script src="renderer.js"></script>
 </body>
 </html>

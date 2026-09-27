@@ -21,6 +21,8 @@ function run(command, args) {
   if (result.status !== 0) process.exit(result.status || 1);
 }
 
+run(process.execPath, [path.join(__dirname, 'build-searxng.js')]);
+
 if (targetPlatform === 'win32') {
   run('dotnet', [
     'publish',

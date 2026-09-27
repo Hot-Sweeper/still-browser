@@ -1,5 +1,5 @@
 const { shell } = require('electron');
-const { existsSync, readFileSync, writeFileSync } = require('node:fs');
+const { chmodSync, existsSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 function createDownloadManager({ browsingSession, userDataPath, getWindow }) {
@@ -9,6 +9,7 @@ function createDownloadManager({ browsingSession, userDataPath, getWindow }) {
   const recoveryTimers = new Map();
   let emitTimer;
   let records = loadRecords(statePath);
+  try { chmodSync(statePath, 0o600); } catch {}
 
   function publicRecords() {
     return records.slice(0, 80).map(({ autoRetries, ...record }) => ({ ...record }));
@@ -16,7 +17,8 @@ function createDownloadManager({ browsingSession, userDataPath, getWindow }) {
 
   function persist() {
     try {
-      writeFileSync(statePath, JSON.stringify(records.slice(0, 200)), 'utf8');
+      writeFileSync(statePath, JSON.stringify(records.slice(0, 200)), { encoding: 'utf8', mode: 0o600 });
+      chmodSync(statePath, 0o600);
     } catch {}
   }
 

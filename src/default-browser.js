@@ -30,9 +30,13 @@ function registerStillBrowser() {
 
 async function openDefaultBrowserSettings() {
   if (process.platform === 'win32') {
-    registerStillBrowser();
-    await shell.openExternal('ms-settings:defaultapps?registeredAppUser=Still');
-    return true;
+    if (!registerStillBrowser()) return false;
+    try {
+      await shell.openExternal('ms-settings:defaultapps?registeredAppUser=Still');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   if (!app.isPackaged) return false;

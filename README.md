@@ -10,6 +10,9 @@ Still is a calm, open-source Chromium browser built around five fixed browsing s
 - Five persistent slots with drag-to-reorder behavior
 - Middle-click and incoming web links use an empty slot or ask which slot to replace
 - Back, forward, reload, hard reload, and address-search shortcuts
+- A bundled, loopback-only SearXNG instance as the default search engine
+- Type `editor` in the address bar to open a blank, local writing page
+- Type `learn` to manage the channels allowed in the balanced feed and on YouTube Home; optional suggestions are discovered from local watch history
 - Downloads view with pause, resume, retry, reveal, and recovery support
 - YouTube video, audio, and thumbnail downloads through a verified bundled `yt-dlp`
 - Per-site camera, microphone, location, and notification permissions
@@ -43,6 +46,8 @@ npm start
 
 `npm ci` downloads the official `yt-dlp` executable for the current platform and verifies it against the release's SHA-256 checksum before storing it under the ignored `build/vendor` directory.
 
+`npm start` and packaging builds also prepare the pinned SearXNG sidecar. Its official source archive is checksum-verified and shipped beside the executable. Python 3.10 or newer is required only to build the sidecar; release packages include their own runtime and do not require Python or Docker.
+
 ## Keyboard and mouse controls
 
 - `Ctrl+L` — search or enter an address
@@ -54,6 +59,8 @@ npm start
 - Middle-click a link — open it using the same slot chooser as an incoming URL
 - `Ctrl+R` or `F5` — reload
 - `Ctrl+Shift+R` — hard reload without cache
+- `Ctrl++` / `Ctrl+-` — zoom only the active page
+- `Ctrl+0` — reset the active page to 100%
 
 Move the pointer to the physical top edge of the window to reveal the slot rail. Double-click an occupied slot to edit its address, or click an empty slot to search immediately.
 
@@ -77,6 +84,8 @@ Linux builds produce AppImage and Debian packages. Windows packaging additionall
 ## Platform notes
 
 Still stores each device's browsing profile locally; cloning the repository synchronizes the application code, not private cookies or history.
+
+Still Search listens only on `127.0.0.1`, generates an on-device instance secret, proxies result images, disables SearXNG metrics and remote autocomplete, and excludes Google-family engines. SearXNG remains a metasearch engine: queries leave the device only for the independent upstream engines needed to retrieve results.
 
 - Windows profile: `%APPDATA%\Focus Slots` (kept for compatibility with early Still builds)
 - Linux profile: `~/.config/Still`

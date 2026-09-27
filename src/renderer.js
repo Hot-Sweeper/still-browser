@@ -2,6 +2,7 @@ const SLOT_COUNT = 5;
 const elements = {
   chrome: document.querySelector('#chrome'),
   webviews: document.querySelector('#webviews'),
+  loadingCover: document.querySelector('#page-loading-cover'),
   transitionStage: document.querySelector('#page-transition-stage'),
   edgeLeft: document.querySelector('.page-edge-fade.left'),
   edgeRight: document.querySelector('.page-edge-fade.right'),
@@ -21,10 +22,16 @@ const elements = {
   replacementUrl: document.querySelector('#slot-replacement-url'),
   replacementList: document.querySelector('#slot-replacement-list'),
   replacementCancel: document.querySelector('#slot-replacement-cancel'),
-  toast: document.querySelector('#toast')
+  toast: document.querySelector('#toast'),
+  toastMessage: document.querySelector('#toast-message'),
+  toastAction: document.querySelector('#toast-action'),
+  toastClose: document.querySelector('#toast-close')
 };
 
 let startPageUrl = '';
+let editorPageUrl = '';
+let learnPageUrl = '';
+let searchBaseUrl = '';
 let bookmarks = [];
 let importedBookmarks = [];
 let customBookmarks = [];
@@ -33,6 +40,9 @@ let importedHistory = [];
 let recentHistory = [];
 let downloads = [];
 let activeIndex = 0;
+let updateNoticeShown = false;
+let updateAvailable = false;
+let updateNoticePath = '';
 let editingIndex = -1;
 let draggedIndex = -1;
 let hideTimer;
@@ -43,6 +53,8 @@ let utilityAnimationToken = 0;
 let lastUtilityWheelAt = 0;
 let slotTransitionToken = 0;
 let slotTransitionAnimations = [];
+let pendingVerticalNavigation = null;
+let historyNavigationPending = false;
 let lastSlotInteractionAt = 0;
 let snapshotResizeTimer;
 let newSlotEdgeTimer;
@@ -65,7 +77,7 @@ const permissionActivityByGuest = new Map();
 const faviconUpscaleJobs = new Map();
 const SLOT_TRANSITION_DURATION = 220;
 const NEW_SLOT_CONFIRM_WINDOW = 1050;
-const utilityModes = ['bookmarks', 'history', 'downloads', 'permissions', 'theme', 'tabdock'];
+const utilityModes = ['bookmarks', 'history', 'downloads', 'permissions', 'browser', 'theme', 'tabdock'];
 const utilityMetadata = {
   bookmarks: {
     label: 'Bookmarks',
@@ -82,6 +94,10 @@ const utilityMetadata = {
   permissions: {
     label: 'Site Permissions',
     icon: '<svg viewBox="0 0 24 24"><path d="M12 3.2 19 6v5.1c0 4.4-2.8 7.6-7 9.7-4.2-2.1-7-5.3-7-9.7V6l7-2.8Z"/><path d="M9.2 12.1 11 14l3.9-4.2"/></svg>'
+  },
+  browser: {
+    label: 'Browser Setup',
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.8 12h16.4M12 3.5c-2.2 2.3-3.4 5.2-3.4 8.5s1.2 6.2 3.4 8.5c2.2-2.3 3.4-5.2 3.4-8.5S14.2 5.8 12 3.5Z"/></svg>'
   },
   theme: {
     label: 'Appearance',
@@ -101,16 +117,44 @@ const slots = Array.from({ length: SLOT_COUNT }, (_, index) => ({
   favicon: '',
   dockFavicon: '',
   ready: false,
+  loading: false,
+  loadingCoverTimer: null,
   pendingUrl: '',
   snapshot: '',
   snapshotImage: null,
   snapshotGeneration: 0,
   snapshotRefreshTimer: null,
   mediaPlaying: false,
+  zoomFactor: 1,
   startupMediaBlocked: true,
   crashRecoveryTimes: [],
   webview: null
 }));
+
+function syncPageLoadingCover() {
+  elements.loadingCover.hidden = !slots[activeIndex]?.loading;
+}
+
+function beginPageLoading(slot) {
+  clearTimeout(slot.loadingCoverTimer);
+  slot.loadingCoverTimer = null;
+  if (slot.loading) return;
+  slot.loading = true;
+  if (slot.index === activeIndex) syncPageLoadingCover();
+}
+
+function finishPageLoading(slot, delay = 120) {
+  clearTimeout(slot.loadingCoverTimer);
+  slot.loadingCoverTimer = setTimeout(() => {
+    slot.loadingCoverTimer = null;
+    if (!slot.loading) return;
+    slot.loading = false;
+    if (slot.index === activeIndex) {
+      completeVerticalNavigation(slot);
+      syncPageLoadingCover();
+    }
+  }, delay);
+}
 
 function loadRecentHistory() {
   try {
@@ -153,7 +197,14 @@ function rememberVisit(slot) {
 }
 
 function saveState() {
-  const state = slots.map(({ id, occupied, title, url, favicon }) => ({ id, occupied, title, url, favicon }));
+  const state = slots.map(({ id, occupied, title, url, favicon, zoomFactor }) => ({
+    id,
+    occupied,
+    title,
+    url,
+    favicon,
+    zoomFactor
+  }));
   localStorage.setItem('focus-slots-state', JSON.stringify({ activeIndex, slots: state }));
 }
 
@@ -181,6 +232,9 @@ function restoreState() {
       slots[index].title = internalStartPage && item.occupied ? 'Still' : (item.title || '');
       slots[index].url = internalStartPage ? '' : item.url;
       slots[index].favicon = internalStartPage ? '' : (item.favicon || '');
+      slots[index].zoomFactor = Number.isFinite(item.zoomFactor)
+        ? Math.min(5, Math.max(0.25, item.zoomFactor))
+        : 1;
     });
     activeIndex = Number.isInteger(saved.activeIndex) ? Math.max(0, Math.min(4, saved.activeIndex)) : 0;
     if (!slots.some((slot) => slot.occupied)) slots[0].occupied = true;
@@ -230,11 +284,51 @@ function requestChromeHide() {
   scheduleChromeHide();
 }
 
-function showToast(message, duration = 3200) {
+function hideToast() {
   clearTimeout(toastTimer);
-  elements.toast.textContent = message;
+  elements.toast.classList.remove('show', 'has-action');
+  elements.toastAction.hidden = true;
+  elements.toastAction.onclick = null;
+  elements.toastClose.hidden = true;
+}
+
+function showToast(message, duration = 3200, action = null) {
+  clearTimeout(toastTimer);
+  elements.toastMessage.textContent = message;
+  elements.toastAction.hidden = !action;
+  elements.toastClose.hidden = !action?.dismissible;
+  elements.toast.classList.toggle('has-action', Boolean(action));
+  elements.toastAction.onclick = null;
+  if (action) {
+    elements.toastAction.textContent = action.label;
+    elements.toastAction.onclick = () => {
+      clearTimeout(toastTimer);
+      hideToast();
+      Promise.resolve(action.run()).catch(() => showToast('Could not open that page.'));
+    };
+  }
   elements.toast.classList.add('show');
-  toastTimer = setTimeout(() => elements.toast.classList.remove('show'), duration);
+  toastTimer = setTimeout(hideToast, duration);
+}
+
+async function restartForUpdate() {
+  if (await window.focusSlots.installUpdate()) return;
+  updateAvailable = false;
+  updateNoticeShown = false;
+  updateNoticePath = '';
+  showToast('The staged update is no longer available.', 6000);
+}
+
+function showUpdateReady(stagedPath = '') {
+  if (updateNoticeShown && (!stagedPath || stagedPath === updateNoticePath)) return;
+  updateAvailable = true;
+  updateNoticeShown = true;
+  updateNoticePath = stagedPath;
+  showToast('Still is ready to update. Restart whenever you’re done watching.', 30000, {
+    label: 'Restart & update',
+    run: restartForUpdate,
+    dismissible: true
+  });
 }
 
 const permissionDefinitions = {
@@ -603,6 +697,64 @@ function renderUtilityPanel(mode, forceOpen = false) {
   heading.textContent = utilityMetadata[mode].label;
   elements.utilityPanel.appendChild(heading);
 
+  if (updateAvailable) {
+    const updateAction = utilityListItem('Restart & update Still', '', { action: true });
+    updateAction.addEventListener('click', restartForUpdate);
+    elements.utilityPanel.appendChild(updateAction);
+  }
+
+  if (mode !== 'browser') {
+    const browserSetup = utilityListItem('Browser setup', 'Default browser and sign-in options', { action: true });
+    browserSetup.addEventListener('click', () => {
+      utilityMode = 'browser';
+      localStorage.setItem('still-utility-mode', utilityMode);
+      renderUtilityButton();
+      renderUtilityPanel('browser', true);
+    });
+    elements.utilityPanel.appendChild(browserSetup);
+  }
+
+  if (mode === 'browser') {
+    const defaultAction = utilityListItem('Make Still the default browser', 'Choose Still for HTTP and HTTPS in Windows Settings', { action: true });
+    defaultAction.addEventListener('click', async () => {
+      const opened = await window.focusSlots.openDefaultBrowserSettings();
+      if (!opened) showToast('Could not open default-browser settings.');
+    });
+    elements.utilityPanel.appendChild(defaultAction);
+
+    const pageUrl = slots[activeIndex]?.url || '';
+    const edgeAction = utilityListItem('Open this page in Microsoft Edge', 'Works even when Still is your default browser', { action: true });
+    edgeAction.disabled = !/^https?:\/\//i.test(pageUrl);
+    edgeAction.addEventListener('click', async () => {
+      const opened = await window.focusSlots.openInEdge(pageUrl);
+      if (!opened) showToast('Could not open Microsoft Edge. Copy the link instead.');
+    });
+    elements.utilityPanel.appendChild(edgeAction);
+
+    const externalAction = utilityListItem('Open with Windows default browser', 'If that is Still, copy the link into Chrome, Edge, or Firefox', { action: true });
+    externalAction.disabled = !/^https?:\/\//i.test(pageUrl);
+    externalAction.addEventListener('click', async () => {
+      const opened = await window.focusSlots.openInSystemBrowser(pageUrl);
+      if (!opened) showToast('Could not open the page in your system browser.');
+    });
+    elements.utilityPanel.appendChild(externalAction);
+
+    const copyAction = utilityListItem('Copy page link', 'Paste into Chrome, Edge, Firefox, or another browser', { action: true });
+    copyAction.disabled = !/^https?:\/\//i.test(pageUrl);
+    copyAction.addEventListener('click', async () => {
+      if (await window.focusSlots.copyPageUrl(pageUrl)) showToast('Page link copied.');
+    });
+    elements.utilityPanel.appendChild(copyAction);
+
+    const note = document.createElement('div');
+    note.className = 'utility-panel-empty';
+    note.textContent = 'Google may still reject sign-in inside Still. Making Still your default does not remove that block. External sign-in will not transfer cookies back to Still.';
+    elements.utilityPanel.appendChild(note);
+    elements.utilityPanel.hidden = false;
+    elements.utilityButton.classList.add('panel-open');
+    return;
+  }
+
   if (mode === 'downloads') {
     renderDownloadEntries();
     elements.utilityPanel.hidden = false;
@@ -667,7 +819,7 @@ function changeUtilityMode(direction) {
 }
 
 async function runUtilityAction() {
-  if (utilityMode === 'bookmarks' || utilityMode === 'history' || utilityMode === 'downloads' || utilityMode === 'permissions') {
+  if (utilityMode === 'bookmarks' || utilityMode === 'history' || utilityMode === 'downloads' || utilityMode === 'permissions' || utilityMode === 'browser') {
     renderUtilityPanel(utilityMode);
     return;
   }
@@ -805,10 +957,19 @@ function displayUrl(url) {
 function normalizeInput(value) {
   const input = value.trim();
   if (!input) return startPageUrl;
+  const normalizedInput = input.toLocaleLowerCase();
+  if (normalizedInput === 'editor') return editorPageUrl;
+  if (normalizedInput === 'learn' || normalizedInput === 'still learn') return learnPageUrl;
   if (/^https?:\/\//i.test(input)) return input;
   if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(input)) return `http://${input}`;
   if (/^[\w.-]+\.[a-z]{2,}(:\d+)?(\/.*)?$/i.test(input)) return `https://${input}`;
-  return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
+  if (!searchBaseUrl) {
+    showToast('Still Search is unavailable. Reinstall Still to restore private search.', 7000);
+    return startPageUrl;
+  }
+  const search = new URL('search', searchBaseUrl);
+  search.searchParams.set('q', input);
+  return search.href;
 }
 
 function suggestionLabel(url) {
@@ -884,6 +1045,7 @@ function rankedHistoryMatches(value, limit = 5) {
 
 function navigateSlot(slot, url) {
   const target = url || startPageUrl;
+  prepareVerticalNavigation(slot, 'forward');
   clearTimeout(slot.snapshotRefreshTimer);
   slot.snapshotRefreshTimer = null;
   slot.url = target;
@@ -892,6 +1054,7 @@ function navigateSlot(slot, url) {
   slot.snapshotImage = null;
   slot.snapshotGeneration++;
   slot.dockFavicon = '';
+  beginPageLoading(slot);
   slot.title = target === startPageUrl ? 'Still' : 'Loading…';
   const webview = createWebview(slot);
   try {
@@ -1001,21 +1164,70 @@ async function warmSlotSnapshots() {
   }
 }
 
+function focusStartPageInput(slot) {
+  const webview = slot?.webview;
+  if (!webview || slot.index !== activeIndex || !slot.focusStartInput) return;
+  let currentUrl = '';
+  try { currentUrl = webview.getURL(); } catch {}
+  if (currentUrl !== startPageUrl) return;
+  try { webview.focus(); } catch {}
+  webview.executeJavaScript(`
+    (() => {
+      const input = document.querySelector('#search-input');
+      if (!input) return false;
+      input.focus({ preventScroll: true });
+      return document.activeElement === input;
+    })();
+  `, true).then((focused) => {
+    if (focused) slot.focusStartInput = false;
+  }).catch(() => {});
+}
+
+const PAGE_ZOOM_FACTORS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+
+function applySlotZoom(slot) {
+  if (!slot?.webview || !slot.ready) return;
+  const factor = Number.isFinite(slot.zoomFactor) ? slot.zoomFactor : 1;
+  try { slot.webview.setZoomFactor(factor); } catch {}
+}
+
+function changePageZoom(direction) {
+  const slot = slots[activeIndex];
+  if (!slot?.webview) return;
+  const current = Number.isFinite(slot.zoomFactor) ? slot.zoomFactor : 1;
+  let factor = 1;
+  if (direction > 0) {
+    factor = PAGE_ZOOM_FACTORS.find((value) => value > current + 0.001) || PAGE_ZOOM_FACTORS.at(-1);
+  } else if (direction < 0) {
+    factor = [...PAGE_ZOOM_FACTORS].reverse().find((value) => value < current - 0.001) || PAGE_ZOOM_FACTORS[0];
+  }
+  slot.zoomFactor = factor;
+  applySlotZoom(slot);
+  saveState();
+  showToast(`Page zoom: ${Math.round(factor * 100)}%`);
+}
+
 function createWebview(slot) {
   if (slot.webview) return slot.webview;
   const webview = document.createElement('webview');
   webview.setAttribute('partition', 'persist:focus');
+  webview.setAttribute('allowpopups', '');
   webview.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
   webview.setAttribute('aria-label', `Browsing slot ${slot.index + 1}`);
   webview.src = slot.url || startPageUrl;
 
   webview.addEventListener('dom-ready', () => {
     slot.ready = true;
+    finishPageLoading(slot);
+    applySlotZoom(slot);
     suppressRestoredBackgroundMedia(slot);
     if (slot.index === activeIndex) {
       window.focusSlots.setActiveGuest(webview.getWebContentsId());
     }
-    if (!slot.pendingUrl) return;
+    if (!slot.pendingUrl) {
+      focusStartPageInput(slot);
+      return;
+    }
     const pendingUrl = slot.pendingUrl;
     slot.pendingUrl = '';
     try {
@@ -1026,6 +1238,7 @@ function createWebview(slot) {
   });
 
   webview.addEventListener('did-attach', () => {
+    applySlotZoom(slot);
     if (slot.startupMediaBlocked) {
       try { webview.setAudioMuted(true); } catch {}
     }
@@ -1034,6 +1247,19 @@ function createWebview(slot) {
     }
   });
 
+  webview.addEventListener('enter-html-full-screen', () => {
+    if (slot.index === activeIndex) document.body.classList.add('guest-video-fullscreen');
+  });
+  webview.addEventListener('leave-html-full-screen', () => {
+    document.body.classList.remove('guest-video-fullscreen');
+  });
+
+  webview.addEventListener('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isInPlace) {
+      if (pendingVerticalNavigation?.slot !== slot) prepareVerticalNavigation(slot, 'forward');
+      beginPageLoading(slot);
+    }
+  });
   webview.addEventListener('did-navigate', () => updateSlotFromNavigation(slot));
   webview.addEventListener('did-navigate-in-page', () => updateSlotFromNavigation(slot));
   webview.addEventListener('did-start-loading', () => {
@@ -1043,17 +1269,14 @@ function createWebview(slot) {
     slot.mediaPlaying = false;
   });
   webview.addEventListener('did-stop-loading', () => {
+    finishPageLoading(slot, 80);
     suppressRestoredBackgroundMedia(slot);
     if (slot.index === activeIndex) scheduleSlotSnapshotRefresh(slot, 800);
   });
   webview.addEventListener('media-started-playing', () => {
     if (slot.startupMediaBlocked) suppressRestoredBackgroundMedia(slot);
-    clearTimeout(slot.snapshotRefreshTimer);
-    slot.snapshotRefreshTimer = null;
     slot.mediaPlaying = true;
-    slot.snapshot = '';
-    slot.snapshotImage = null;
-    slot.snapshotGeneration++;
+    if (slot.index === activeIndex) scheduleSlotSnapshotRefresh(slot, 180);
   });
   webview.addEventListener('media-paused', () => {
     slot.mediaPlaying = false;
@@ -1076,7 +1299,31 @@ function createWebview(slot) {
     saveState();
   });
   webview.addEventListener('did-fail-load', (event) => {
-    if (event.errorCode !== -3) showToast(`Could not open that page (${event.errorDescription}).`);
+    if (event.errorCode === -3 || event.isMainFrame === false) return;
+    const failedUrl = String(event.validatedURL || slot.url || '');
+    if (/^https:\/\//i.test(failedUrl) && /^ERR_CERT_/i.test(event.errorDescription)) {
+      showToast('Still blocked an untrusted certificate for this site.', 15000, {
+        label: 'Access anyway',
+        run: async () => {
+          if (!await window.focusSlots.allowCertificateForUrl(failedUrl)) {
+            showToast('Could not create a temporary certificate exception.');
+            return;
+          }
+          webview.loadURL(failedUrl);
+        }
+      });
+      return;
+    }
+    if (/^https:\/\//i.test(failedUrl) && event.errorDescription === 'ERR_SSL_PROTOCOL_ERROR') {
+      const fallbackUrl = new URL(failedUrl);
+      fallbackUrl.protocol = 'http:';
+      showToast('HTTPS failed. Access anyway will use an unencrypted connection.', 15000, {
+        label: 'Access anyway',
+        run: () => webview.loadURL(fallbackUrl.href)
+      });
+      return;
+    }
+    showToast(`Could not open that page (${event.errorDescription}).`);
   });
   webview.addEventListener('render-process-gone', (event) => {
     const reason = event.details?.reason || 'crashed';
@@ -1495,6 +1742,10 @@ function slotEditor(slot) {
   input.setAttribute('aria-label', `Search or enter address for slot ${slot.index + 1}`);
   const suggestionPanel = document.createElement('div');
   suggestionPanel.className = 'slot-suggestions';
+  // Keep the empty dropdown out of layout until suggestions have actually
+  // been rendered. If focus moves during a slot repaint, an uninitialized
+  // panel otherwise appears as a thin glass bar beneath the address field.
+  suggestionPanel.hidden = true;
   let currentSuggestions = [];
   let selectedSuggestion = -1;
 
@@ -1533,17 +1784,28 @@ function slotEditor(slot) {
       suggestionPanel.appendChild(item);
     });
 
-    const google = document.createElement('button');
-    google.type = 'button';
-    google.className = 'slot-suggestion search-option';
-    const googleTitle = document.createElement('span');
-    googleTitle.textContent = `Search Google for “${query}”`;
-    const googleLabel = document.createElement('small');
-    googleLabel.textContent = 'Google search';
-    google.append(googleTitle, googleLabel);
-    google.addEventListener('mousedown', (event) => event.preventDefault());
-    google.addEventListener('click', () => finishSlotEdit(slot.index, query, normalizeInput(query)));
-    suggestionPanel.appendChild(google);
+    const search = document.createElement('button');
+    search.type = 'button';
+    search.className = 'slot-suggestion search-option';
+    const searchTitle = document.createElement('span');
+    const normalizedQuery = query.toLocaleLowerCase();
+    const opensEditor = normalizedQuery === 'editor';
+    const opensLearn = normalizedQuery === 'learn' || normalizedQuery === 'still learn';
+    searchTitle.textContent = opensEditor
+      ? 'Open blank editor'
+      : opensLearn
+        ? 'Open Still Learn'
+        : `Search Still Search for “${query}”`;
+    const searchLabel = document.createElement('small');
+    searchLabel.textContent = opensEditor
+      ? 'Local writing page'
+      : opensLearn
+        ? 'Your selected YouTube channels only'
+        : 'Private local metasearch';
+    search.append(searchTitle, searchLabel);
+    search.addEventListener('mousedown', (event) => event.preventDefault());
+    search.addEventListener('click', () => finishSlotEdit(slot.index, query, normalizeInput(query)));
+    suggestionPanel.appendChild(search);
   };
 
   form.append(input, suggestionPanel);
@@ -1551,6 +1813,15 @@ function slotEditor(slot) {
   form.addEventListener('dblclick', (event) => event.stopPropagation());
 
   const commitEdit = () => {
+    const normalizedInput = input.value.trim().toLocaleLowerCase();
+    if (normalizedInput === 'editor') {
+      finishSlotEdit(slot.index, input.value, editorPageUrl);
+      return;
+    }
+    if (normalizedInput === 'learn' || normalizedInput === 'still learn') {
+      finishSlotEdit(slot.index, input.value, learnPageUrl);
+      return;
+    }
     const suggestion = selectedSuggestion >= 0 ? currentSuggestions[selectedSuggestion] : null;
     const useHistory = suggestion && suggestion.score >= 620;
     finishSlotEdit(slot.index, input.value, useHistory ? suggestion.url : '');
@@ -1661,6 +1932,7 @@ function renderSlots() {
 function resetSlotTransitionVisuals() {
   slotTransitionAnimations.forEach((animation) => animation.cancel());
   slotTransitionAnimations = [];
+  pendingVerticalNavigation = null;
   elements.transitionStage.hidden = true;
   elements.transitionStage.replaceChildren();
   slots.forEach((slot) => {
@@ -1672,6 +1944,73 @@ function resetSlotTransitionVisuals() {
     slot.webview.style.removeProperty('backface-visibility');
     slot.webview.style.removeProperty('transform');
   });
+}
+
+function prepareVerticalNavigation(slot, direction) {
+  if (slot.index !== activeIndex || !slot.snapshotImage
+      || matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+  resetSlotTransitionVisuals();
+  const token = ++slotTransitionToken;
+  const outgoing = slot.snapshotImage.cloneNode(true);
+  outgoing.style.zIndex = '1';
+  elements.transitionStage.replaceChildren(outgoing);
+  elements.transitionStage.hidden = false;
+  pendingVerticalNavigation = { slot, direction, outgoing, token };
+  return true;
+}
+
+function completeVerticalNavigation(slot) {
+  const pending = pendingVerticalNavigation;
+  if (!pending || pending.slot !== slot || pending.token !== slotTransitionToken) return false;
+  pendingVerticalNavigation = null;
+  const { outgoing, direction, token } = pending;
+  const incoming = slot.webview;
+  if (!incoming) {
+    resetSlotTransitionVisuals();
+    return false;
+  }
+  incoming.classList.add('active');
+  incoming.style.zIndex = '49';
+  incoming.style.pointerEvents = 'none';
+  incoming.style.willChange = 'transform';
+  incoming.style.backfaceVisibility = 'hidden';
+  const travel = direction === 'back' ? -1 : 1;
+  const timing = {
+    duration: SLOT_TRANSITION_DURATION,
+    easing: 'cubic-bezier(.16, 1, .3, 1)',
+    fill: 'both'
+  };
+  const outgoingAnimation = outgoing.animate([
+    { transform: 'translate3d(0, 0, 0)' },
+    { transform: `translate3d(0, ${travel * 100}%, 0)` }
+  ], timing);
+  const incomingAnimation = incoming.animate([
+    { transform: `translate3d(0, ${-travel * 100}%, 0)` },
+    { transform: 'translate3d(0, 0, 0)' }
+  ], timing);
+  slotTransitionAnimations = [outgoingAnimation, incomingAnimation];
+  Promise.allSettled(slotTransitionAnimations.map((animation) => animation.finished)).then(() => {
+    if (token !== slotTransitionToken) return;
+    resetSlotTransitionVisuals();
+  });
+  return true;
+}
+
+function navigateHistory(direction) {
+  const slot = slots[activeIndex];
+  const webview = slot?.webview;
+  if (!webview || historyNavigationPending) return;
+  const canNavigate = direction === 'back' ? webview.canGoBack() : webview.canGoForward();
+  if (!canNavigate) return;
+  historyNavigationPending = true;
+  prepareVerticalNavigation(slot, direction);
+  beginPageLoading(slot);
+  try {
+    if (direction === 'back') webview.goBack();
+    else webview.goForward();
+  } finally {
+    setTimeout(() => { historyNavigationPending = false; }, 260);
+  }
 }
 
 function animateLiveSlotTransition(outgoing, incoming, direction) {
@@ -1746,7 +2085,9 @@ function activateSlot(index, { hideAfter = true, transitionDirection = 0 } = {})
   const previousIndex = activeIndex;
   const outgoingSlot = slots[previousIndex];
   const outgoingWebview = outgoingSlot?.webview;
+  if (editingIndex >= 0 && editingIndex !== index) editingIndex = -1;
   activeIndex = index;
+  syncPageLoadingCover();
   const activeWebview = createWebview(slot);
   slot.startupMediaBlocked = false;
   try { activeWebview.setAudioMuted(false); } catch {}
@@ -1762,6 +2103,7 @@ function activateSlot(index, { hideAfter = true, transitionDirection = 0 } = {})
   try {
     window.focusSlots.setActiveGuest(activeWebview.getWebContentsId());
   } catch {}
+  applySlotZoom(slot);
   renderSlots();
   renderUtilityButton();
   saveState();
@@ -1887,9 +2229,12 @@ function openSlot(index, url = startPageUrl, { transitionDirection = 0 } = {}) {
   slot.url = url;
   slot.favicon = '';
   slot.dockFavicon = '';
+  slot.focusStartInput = url === startPageUrl;
+  beginPageLoading(slot);
   createWebview(slot);
   if (alreadyCreated) navigateSlot(slot, url);
   activateSlot(index, { transitionDirection });
+  requestAnimationFrame(() => focusStartPageInput(slot));
 }
 
 function openInAvailableSlot(url, { edit = false, fallbackToCurrent = false } = {}) {
@@ -1979,7 +2324,9 @@ function openMiddleClickedLink(url) {
 function closeSlot(index) {
   const slot = slots[index];
   clearTimeout(slot.snapshotRefreshTimer);
+  clearTimeout(slot.loadingCoverTimer);
   slot.snapshotRefreshTimer = null;
+  slot.loadingCoverTimer = null;
   const wasActive = activeIndex === index;
   if (editingIndex === index) editingIndex = -1;
   slot.webview?.remove();
@@ -1989,11 +2336,13 @@ function closeSlot(index) {
   slot.url = '';
   slot.favicon = '';
   slot.ready = false;
+  slot.loading = false;
   slot.pendingUrl = '';
   slot.snapshot = '';
   slot.snapshotImage = null;
   slot.snapshotGeneration++;
   slot.mediaPlaying = false;
+  slot.zoomFactor = 1;
 
   if (!slots.some((item) => item.occupied)) {
     slots[0].occupied = true;
@@ -2019,15 +2368,36 @@ function cycleTheme() {
   showToast(`Theme: ${theme}`);
 }
 
+async function hardReloadSlot(slot = slots[activeIndex]) {
+  const webview = slot?.webview;
+  if (!webview) return;
+  let handled = false;
+  try {
+    handled = await window.focusSlots.hardReload(webview.getWebContentsId());
+  } catch {}
+  if (!handled && webview.isConnected) webview.reloadIgnoringCache();
+}
+
 function runShortcut(shortcut) {
   const webview = slots[activeIndex].webview;
   if (shortcut === 'location') beginSlotEdit(activeIndex);
-  else if (shortcut === 'new-slot') openInAvailableSlot(startPageUrl, { edit: true });
+  else if (shortcut === 'browser-settings') {
+    showChrome();
+    utilityMode = 'browser';
+    localStorage.setItem('still-utility-mode', utilityMode);
+    renderUtilityButton();
+    renderUtilityPanel('browser', true);
+  }
+  else if (shortcut === 'new-slot') openInAvailableSlot(startPageUrl);
+  else if (shortcut === 'open-learn') openInAvailableSlot(learnPageUrl, { fallbackToCurrent: true });
   else if (shortcut === 'close-slot') closeSlot(activeIndex);
-  else if (shortcut === 'back' && webview.canGoBack()) webview.goBack();
-  else if (shortcut === 'forward' && webview.canGoForward()) webview.goForward();
-  else if (shortcut === 'hard-reload') webview.reloadIgnoringCache();
+  else if (shortcut === 'back') navigateHistory('back');
+  else if (shortcut === 'forward') navigateHistory('forward');
+  else if (shortcut === 'hard-reload') hardReloadSlot();
   else if (shortcut === 'reload') webview.reload();
+  else if (shortcut === 'zoom-in') changePageZoom(1);
+  else if (shortcut === 'zoom-out') changePageZoom(-1);
+  else if (shortcut === 'zoom-reset') changePageZoom(0);
   else if (shortcut === 'slot-previous') cycleOccupiedSlot(-1);
   else if (shortcut === 'slot-next') cycleOccupiedSlot(1);
   else if (shortcut === 'tab-dock-previous') moveTabDockSelection(-1);
@@ -2040,9 +2410,15 @@ function runShortcut(shortcut) {
 async function initialize() {
   const bootstrap = await window.focusSlots.bootstrap();
   startPageUrl = bootstrap.startPageUrl;
+  editorPageUrl = bootstrap.editorPageUrl;
+  learnPageUrl = bootstrap.learnPageUrl;
+  if (/^http:\/\/127\.0\.0\.1:\d+\/$/.test(bootstrap.searchBaseUrl)) searchBaseUrl = bootstrap.searchBaseUrl;
   importedBookmarks = bootstrap.bookmarks || [];
   importedHistory = bootstrap.history || [];
   downloads = bootstrap.downloads || [];
+  if (!bootstrap.searchAvailable) showToast('Still Search is unavailable. Reinstall Still to restore private search.', 7000);
+  if (bootstrap.updateAvailable) showUpdateReady(bootstrap.updatePath);
+  if (bootstrap.updateFailed) showToast('The last update failed; Still restored the previous build. The details are in still-update-last.log.', 15000);
   loadRecentHistory();
   loadCustomBookmarks();
   rebuildBrowsingHistory();
@@ -2078,6 +2454,7 @@ elements.chrome.addEventListener('mouseenter', () => clearTimeout(hideTimer));
 elements.chrome.addEventListener('mouseleave', scheduleChromeHide);
 elements.newSlotEdge.addEventListener('click', confirmNewSlotEdgePreview);
 elements.utilityButton.addEventListener('click', runUtilityAction);
+elements.toastClose.addEventListener('click', hideToast);
 elements.utilityButton.addEventListener('wheel', (event) => {
   event.preventDefault();
   event.stopPropagation();
@@ -2131,6 +2508,7 @@ window.focusSlots.onPermissionActivity((activity) => {
 window.focusSlots.onOpenUrl((url) => {
   if (/^https?:\/\//i.test(url)) openExternalUrl(url);
 });
+window.focusSlots.onUpdateReady(showUpdateReady);
 
 elements.replacementCancel.addEventListener('click', hideSlotReplacementModal);
 elements.replacementBackdrop.addEventListener('pointerdown', (event) => {
@@ -2171,19 +2549,29 @@ document.addEventListener('keydown', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.ctrlKey && event.key.toLowerCase() === 'l') {
+  const key = event.key.toLowerCase();
+  if (event.ctrlKey && !event.altKey && ['+', '=', 'add'].includes(key)) {
+    event.preventDefault();
+    changePageZoom(1);
+  } else if (event.ctrlKey && !event.altKey && ['-', 'subtract'].includes(key)) {
+    event.preventDefault();
+    changePageZoom(-1);
+  } else if (event.ctrlKey && !event.altKey && key === '0') {
+    event.preventDefault();
+    changePageZoom(0);
+  } else if (event.ctrlKey && key === 'l') {
     event.preventDefault();
     beginSlotEdit(activeIndex);
-  } else if (event.ctrlKey && event.key.toLowerCase() === 't') {
+  } else if (event.ctrlKey && key === 't') {
     event.preventDefault();
-    openInAvailableSlot(startPageUrl, { edit: true });
-  } else if (event.ctrlKey && event.key.toLowerCase() === 'w') {
+    openInAvailableSlot(startPageUrl);
+  } else if (event.ctrlKey && key === 'w') {
     event.preventDefault();
     closeSlot(activeIndex);
-  } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'r') {
+  } else if (event.ctrlKey && event.shiftKey && key === 'r') {
     event.preventDefault();
-    slots[activeIndex].webview.reloadIgnoringCache();
-  } else if (event.ctrlKey && event.key.toLowerCase() === 'r') {
+    hardReloadSlot();
+  } else if (event.ctrlKey && key === 'r') {
     event.preventDefault();
     slots[activeIndex].webview.reload();
   } else if (event.ctrlKey && /^[1-5]$/.test(event.key)) {

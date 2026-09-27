@@ -9,6 +9,19 @@ const VIDEO_QUALITIES = new Set(['best', '2160', '1440', '1080', '720', '480', '
 const AUDIO_FORMATS = new Set(['mp3', 'm4a']);
 const THUMBNAIL_FORMATS = new Set(['jpg']);
 const activeDownloads = new Map();
+const COOKIE_DIRECTORY_PREFIX = 'still-ytdl-';
+
+async function cleanupStaleCookieDirectories() {
+  const temporaryRoot = path.resolve(app.getPath('temp'));
+  const entries = await fs.promises.readdir(temporaryRoot, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory() || !/^still-ytdl-[a-zA-Z0-9]{6}$/.test(entry.name)) return;
+    const candidate = path.resolve(temporaryRoot, entry.name);
+    if (path.dirname(candidate) !== temporaryRoot || path.basename(candidate) !== entry.name) return;
+    if ((await fs.promises.lstat(candidate)).isSymbolicLink()) return;
+    await fs.promises.rm(candidate, { recursive: true, force: true });
+  }));
+}
 
 function youtubeVideoId(value) {
   try {
@@ -82,7 +95,7 @@ function netscapeCookieLine(cookie) {
 }
 
 async function createCookieFile(browsingSession) {
-  const directory = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'still-ytdl-'));
+  const directory = await fs.promises.mkdtemp(path.join(app.getPath('temp'), COOKIE_DIRECTORY_PREFIX));
   const cookiePath = path.join(directory, 'cookies.txt');
   const cookies = (await browsingSession.cookies.get({})).filter(relevantDownloadCookie);
   const contents = ['# Netscape HTTP Cookie File', ...cookies.map(netscapeCookieLine), ''].join('\n');
@@ -319,6 +332,9 @@ async function beginYouTubeDownload(browsingSession, downloadManager, sender, re
 }
 
 function registerYouTubeDownloader(browsingSession, downloadManager) {
+  // A forced shutdown can occur before the normal finally path removes the
+  // short-lived cookie export. Clear only Still-owned temp directories next run.
+  cleanupStaleCookieDirectories().catch(() => {});
   ipcMain.handle('youtube:download-start', (event, request = {}) => {
     return beginYouTubeDownload(browsingSession, downloadManager, event.sender, request, event.senderFrame?.url || '');
   });

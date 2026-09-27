@@ -118,11 +118,39 @@ try {
   });
 } catch { }
 
+// Match the Sec-GPC request header set by the session so feature detection and
+// network privacy signals cannot disagree.
+try {
+  contextBridge.executeInMainWorld({
+    func: () => {
+      try {
+        Object.defineProperty(Navigator.prototype, 'globalPrivacyControl', {
+          configurable: true,
+          enumerable: true,
+          get: () => true
+        });
+      } catch { }
+    }
+  });
+} catch { }
+
 const isStillStartPage = location.protocol === 'file:' && location.pathname.endsWith('/start.html');
+const isStillLearnPage = location.protocol === 'file:' && location.pathname.endsWith('/learn.html');
 
 if (isStillStartPage) {
   contextBridge.exposeInMainWorld('stillStart', {
-    suggestions: (query) => ipcRenderer.invoke('start:suggestions', query)
+    suggestions: (query) => ipcRenderer.invoke('start:suggestions', query),
+    searchBaseUrl: () => ipcRenderer.invoke('search:base-url')
+  });
+}
+
+if (isStillLearnPage) {
+  contextBridge.exposeInMainWorld('stillLearn', {
+    catalog: () => ipcRenderer.invoke('learn:catalog'),
+    discover: (force = false) => ipcRenderer.invoke('learn:discover', force === true),
+    selection: () => ipcRenderer.invoke('learn:selection'),
+    setSelection: (channelIds) => ipcRenderer.invoke('learn:selection-set', channelIds),
+    feed: (channelIds) => ipcRenderer.invoke('learn:feed', channelIds)
   });
 }
 
@@ -135,6 +163,10 @@ if (isYouTubePage) {
 
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.origin !== location.origin) return;
+    if (event.data?.type === 'still-open-learn') {
+      ipcRenderer.send('learn:open');
+      return;
+    }
     if (event.data?.type !== 'still-youtube-download') return;
     ipcRenderer.invoke('youtube:download-start', {
       url: location.href,

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://i.ytimg.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Still Learn</title>
+  <link rel="stylesheet" href="learn.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="eyebrow">STILL LEARN</p>
+          <h1>Your YouTube.<br><span>Only the signal.</span></h1>
+        </div>
+      </div>
+      <p class="intro">Pick the channels you want. Still mixes their newest uploads evenly, so one channel cannot take over your feed.</p>
+    </header>
+
+    <section class="channel-section" aria-labelledby="channel-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">YOUR SOURCES</p>
+          <h2 id="channel-heading">Included channels</h2>
+        </div>
+        <div class="channel-actions">
+          <span id="selected-count" class="selected-count" aria-live="polite"></span>
+          <button id="select-all" class="text-button" type="button">Select all</button>
+        </div>
+      </div>
+      <div id="channels" class="channels" aria-label="Learning channels"></div>
+    </section>
+
+    <section class="discovery-section" aria-labelledby="discovery-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">FROM YOUR WATCH HISTORY</p>
+          <h2 id="discovery-heading">Other channels you watch</h2>
+        </div>
+        <button id="scan-history" class="refresh-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.7 9A7 7 0 0 0 6.2 6.2L4 8m16 8-2.2 2.2A7 7 0 0 1 5.3 15"/></svg>
+          Scan again
+        </button>
+      </div>
+      <p id="discovery-status" class="status discovery-status" aria-live="polite">Looking through your local YouTube history…</p>
+      <div id="discoveries" class="channels history-channels" aria-label="Channels found in watch history"></div>
+    </section>
+
+    <section class="feed-section" aria-labelledby="feed-heading">
+      <div class="section-heading feed-heading">
+        <div>
+          <p class="eyebrow">BALANCED FEED</p>
+          <h2 id="feed-heading">Latest videos</h2>
+        </div>
+        <button id="refresh" class="refresh-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.7 9A7 7 0 0 0 6.2 6.2L4 8m16 8-2.2 2.2A7 7 0 0 1 5.3 15"/></svg>
+          Refresh
+        </button>
+      </div>
+      <p id="status" class="status" aria-live="polite"></p>
+      <main id="feed" class="feed"></main>
+    </section>
+  </div>
+  <script src="learn.js"></script>
+</body>
+</html>

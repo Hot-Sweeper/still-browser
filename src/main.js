@@ -1,7 +1,7 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, screen, session, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { existsSync, readFileSync, promises: fsPromises } = require('node:fs');
+const { existsSync, readFileSync, readdirSync, promises: fsPromises } = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const { fileURLToPath, pathToFileURL } = require('node:url');
@@ -13,13 +13,24 @@ const { prepareOperaHistory } = require('./import-opera-history');
 const { registerYouTubeDownloader } = require('./youtube-downloader');
 const { createDownloadManager } = require('./download-manager');
 const { openDefaultBrowserSettings, registerStillBrowser } = require('./default-browser');
+const { startLocalSearxng } = require('./searxng');
 
 const mouseNavigationTestMode = process.env.FOCUS_SLOTS_MOUSE_TEST === '1';
+const browsingPartition = 'persist:focus';
 // A restored document must receive a fresh user gesture before Chromium may autoplay media.
 app.commandLine.appendSwitch('autoplay-policy', 'document-user-activation-required');
+// Keep every renderer inside Chromium's OS-level sandbox, including any future
+// windows that might otherwise omit an explicit sandbox preference.
+app.enableSandbox();
+const shellPagePath = path.join(__dirname, 'index.html');
 const startPagePath = path.join(__dirname, 'start.html');
+const learnPagePath = path.join(__dirname, 'learn.html');
 const startPageUrl = pathToFileURL(startPagePath).href;
+const editorPageUrl = pathToFileURL(path.join(__dirname, 'editor.html')).href;
+const learnPageUrl = pathToFileURL(learnPagePath).href;
 const youtubeUiScript = readFileSync(path.join(__dirname, 'youtube-ui.js'), 'utf8');
+const youtubeFilterScript = readFileSync(path.join(__dirname, 'youtube-filter.js'), 'utf8');
+const youtubeHomeScript = readFileSync(path.join(__dirname, 'youtube-home.js'), 'utf8');
 // Windows keeps the original profile location so the rename never loses cookies,
 // extensions, or saved slots. Other platforms use a conventional Still profile.
 const userDataPath = path.join(app.getPath('appData'), process.platform === 'win32' ? 'Focus Slots' : 'Still');
@@ -43,19 +54,171 @@ let lastMouseNavigation = { direction: '', source: '', time: 0 };
 let activeGuestId = 0;
 let mouseNavigationHelper;
 let downloadManager;
+let localSearch;
+let localSearchBaseUrl = '';
+let guestForcedFullscreen = false;
+let updateNoticePath = '';
+let updatePoll;
 let pendingExternalUrl = findExternalUrl(process.argv);
 let lastModifierWheel = { kind: '', direction: 0, source: '', time: 0 };
 let lastExternalApplicationRequest = { url: '', time: 0 };
 const guestContentsById = new Map();
 const faviconUpscaleJobs = new Map();
+const learningFeedCache = new Map();
+const learningAvatarCache = new Map();
+const discoveredLearningChannels = new Map();
+let learningDiscoveryCache = { signature: '', time: 0, result: null };
+let learningDiscoveryJob = null;
+let learningHomeFeedCache = { signature: '', time: 0, videos: [], failed: [] };
+let learningHomeFeedJob = null;
+let musicHomeFeedCache = { signature: '', time: 0, videos: [], failed: [] };
+let musicHomeFeedJob = null;
+const learningCatalogVersion = 9;
+const learningChannels = Object.freeze([
+  { id: 'UCOJIGngtr4zcPuuZX6dO8aQ', name: 'Tech2WiLD', accent: '#7c5cff' },
+  { id: 'UCPix8N6PMRI4KzgyjuZeF0g', name: 'Fahd Mirza', accent: '#ff8a4c' },
+  { id: 'UCOCahKBCEUuzDJawM7yN1dg', name: 'Bijan Bowen', accent: '#2ec4a6' },
+  { id: 'UCIgnGlGkVRhd4qNFcEwLL4A', name: 'AI Search', accent: '#4e8cff' },
+  { id: 'UCbfYPyITQ-7l4upoX8nvctg', name: 'Two Minute Papers', accent: '#ef5547', addedIn: 3 },
+  { id: 'UChhMeymAOC5PNbbnqxD_w4g', name: 'Just Rayen', accent: '#f06a9b', addedIn: 4 },
+  { id: 'UC9x0AN7BWHpCDHSm9NiJFJQ', name: 'NetworkChuck', accent: '#c9a45c', addedIn: 5 },
+  { id: 'UCawZsQWqfGSbCI5yjkdVkTA', name: 'Matthew Berman', accent: '#f28c45', addedIn: 6 },
+  { id: 'UC2mPtIOYm1XihpmfrJKXjMw', name: 'Nerd Snipe', accent: '#f04e45', addedIn: 7 },
+  { id: 'UCoy6cTJ7Tg0dqS-DI-_REsA', name: 'Chase AI', accent: '#8d70ff', addedIn: 7 },
+  { id: 'UCrJrY9gMcbRL2APnFCXiuBQ', name: 'Christian Peverelli', accent: '#36b9a8', addedIn: 7 },
+  { id: 'UCuU9jE4MHHEIyYMbDfUPSew', name: 'Caleb Writes Code', accent: '#57a7f2', addedIn: 7 },
+  { id: 'UCxE6qpCeMGgyrae2fV-Lhhg', name: 'Duke Pan', accent: '#ff765d', addedIn: 8 },
+  { id: 'UCED3hlYdD0SlCff7jJ8tF3Q', name: 'AI Samson', accent: '#d665f0', addedIn: 8 },
+  { id: 'UC2ojq-nuP8ceeHqiroeKhBA', name: 'Nate Herk | AI Automation', accent: '#3bbf8f', addedIn: 8 },
+  { id: 'UCG4zMyo_SNL7FZwRa85yp2Q', name: 'fal', accent: '#f2cf4a', addedIn: 8 },
+  { id: 'UCKW1UkS5szOItFnKKsWzVRQ', name: 'xCreate', accent: '#4d9fff', addedIn: 8 },
+  { id: 'UCNoGPh6-xT7afBoudgrx56Q', name: 'The Mysticle', accent: '#6a8cff', addedIn: 9 },
+  { id: 'UC5l7RouTQ60oUjLjt1Nh-UQ', name: 'AI Revolution', accent: '#ef5b72', addedIn: 9 },
+  { id: 'UC9Ryt3XOGYBoAJVsBHNGDzA', name: 'Theoretically Media', accent: '#b673ee', addedIn: 9 },
+  { id: 'UCkVfrGwV-iG9bSsgCbrNPxQ', name: 'Better Stack', accent: '#59c3a6', addedIn: 9 },
+  { id: 'UC3ok91FKp_SAtxhz63Ti3KQ', name: 'VoodooDE VR', accent: '#51a9f4', addedIn: 9 },
+  { id: 'UC5rMneyhrBKrNuzJQkRy0uw', name: 'Tyriel Wood - VR Tech', accent: '#ec744f', addedIn: 9 },
+  { id: 'UCKoDvV9qSSlhj_EKWTk5CIw', name: 'Tetiana Discovers', accent: '#d768b8', addedIn: 9 },
+  { id: 'UC2mgZjuHRDW02mx_ok4wfPw', name: 'MRTV - MIXED REALITY TV', accent: '#5bd46e', addedIn: 9 },
+  { id: 'UC0DZj1PNa_Fp0MU6uPSKv5w', name: 'Cloud Codes', accent: '#74a8ff', addedIn: 9 },
+  { id: 'UCSbdMXOI_3HGiFviLZO6kNA', name: 'ThrillSeeker', accent: '#ff4f65', addedIn: 9 },
+  { id: 'UCYwLV1gDwzGbg7jXQ52bVnQ', name: 'Universe of AI', accent: '#8f74ff' },
+  { id: 'UC2WmuBuFq6gL08QYG-JjXKw', name: 'WorldofAI', accent: '#3eb7ff' },
+  { id: 'UCsBjURrPoezykLs9EqgamOA', name: 'Fireship', accent: '#f25f4b' },
+  { id: 'UCbRP3c757lWg9M-U7TyEkXA', name: 'Theo – t3.gg', accent: '#ec5da7' },
+  { id: 'UCXZCJLdBC09xxGZ6gcdrc6A', name: 'OpenAI', accent: '#10a37f' },
+  { id: 'UCrDwWp7EBBv4NwvScIpBDOA', name: 'Anthropic', accent: '#d29b6e' },
+  { id: 'UCRaz_dquopKtb4ptswKcxTA', name: 'Mistral AI', accent: '#f7a53b', addedIn: 2 },
+  { id: 'UCipPA-ZHX6UYGH_Iyti1-Jw', name: 'Qwen · Alibaba Cloud', accent: '#6f7cff', addedIn: 2, feedKeywords: ['qwen'] },
+  { id: 'UCP7jMXSY2xbc3KCAE0MHQ-A', name: 'Google DeepMind · Gemini', accent: '#4c8bf5', addedIn: 2 },
+  { id: 'UCHlNU7kIZhRgSbhHvFoy72w', name: 'Hugging Face', accent: '#ffd21e', addedIn: 2 },
+  { id: 'UCBHcMCGaiJhv-ESTcWGJPcw', name: 'NVIDIA Developer', accent: '#76b900', addedIn: 2 },
+  { id: 'UCwKzYuPkYJ_0v1kYOYXNmoA', name: 'Ollama', accent: '#d6d6d6', addedIn: 2 },
+  { id: 'UCrpz86KspLzW2JF-feKBn-w', name: 'Local AI', accent: '#42c59a', addedIn: 2 },
+  { id: 'UCCb9_Kn8F_Opb3UCGm-lILQ', name: 'Microsoft Research', accent: '#00a4ef', addedIn: 2 }
+]);
+const musicChannels = Object.freeze([
+  { id: 'UCJI5_5Ae0XkY2A58MaAKGjg', name: 'h6itam', accent: '#ff385c' },
+  { id: 'UCS8OjP50HmdeXeKYLvF3rdA', name: 'KORDHELL', accent: '#d23b3b' },
+  { id: 'UCJWUQibZ1DnBb4r4pCCmpGA', name: 'DVRST', accent: '#865dff' },
+  { id: 'UCH8FcwNd0ttrTCsdKep4Fyg', name: 'INTERWORLD', accent: '#576cff' },
+  { id: 'UCdlbBrTTQoMRYTv83ohYjgQ', name: 'LXST CXNTURY', accent: '#9c67db' },
+  { id: 'UCFyDhQ3yNr8eYl895l7nYJw', name: 'KSLV', accent: '#df5656' },
+  { id: 'UCKocLjSeFsiJTgPQlg0q91A', name: 'MoonDeity', accent: '#7184ff' },
+  { id: 'UCHsLqoi00xf5mi2CEOy9ugg', name: 'PlayaPhonk', accent: '#ee884f' },
+  { id: 'UCI_E_bVdNGff07J5HTHUuLg', name: 'DJ FKU', accent: '#ffb329' },
+  { id: 'UCsXGh5GV9HYGpAwtmfQvXYw', name: 'Ogryzek', accent: '#e0b84b' },
+  { id: 'UC8EV5KwPBnp07F3kHnj6-9w', name: 'Eternxlkz', accent: '#4ac1d9' },
+  { id: 'UCAQ2Go2JWMGt60kYXsWy-bQ', name: 'MXZI', accent: '#4e9bff' },
+  { id: 'UCVUhflcUs9R9YEHf5u3nkRQ', name: 'ATLXS', accent: '#f06078' },
+  { id: 'UCHxRxWlcJm2d78ZTx2jpe5g', name: 'Ariis', accent: '#f06ec0' },
+  { id: 'UCrBVMECNKirKrG56SquaBDw', name: 'Sayfalse', accent: '#55c88b' },
+  { id: 'UCF7AofUiOhzjd4Wll-AbtHg', name: 'PHONK ME', accent: '#c65cf2' },
+  { id: 'UCMkBFD0YPtrcoB_tni5uOLQ', name: 'Ryan Celsius Sounds', accent: '#e7a94d' },
+  { id: 'UCxH0sQJKG6Aq9-vFIPnDZ2A', name: 'The Vibe Guide', accent: '#56a7ff' },
+  { id: 'UCYbqreqHm4XAMoMSTMAqAlw', name: 'Phonky Town', accent: '#ff684f' }
+]);
+const learningPreferencesPath = path.join(userDataPath, 'still-learning-channels-v1.json');
+let learningEnabledChannelIds = new Set(learningChannels.map((channel) => channel.id));
+let learningPreferencesWriteQueue = Promise.resolve();
 const faviconCachePath = path.join(userDataPath, 'favicon-cache-v1');
 const permissionPreferencesPath = path.join(userDataPath, 'site-permissions-v1.json');
 const permissionKinds = ['microphone', 'camera', 'location', 'notifications'];
+const temporaryCertificateExceptions = new Set();
 const pendingPermissionRequests = new Map();
 const permissionActivityByGuest = new Map();
 let permissionRequestSequence = 0;
 let permissionPreferences = loadPermissionPreferences();
 let permissionWriteQueue = Promise.resolve();
+
+loadLearningPreferences();
+
+function sanitizedLearningChannel(value) {
+  const id = String(value?.id || '');
+  const name = String(value?.name || '').trim().slice(0, 160);
+  if (!/^UC[\w-]{22}$/.test(id) || !name) return null;
+  return {
+    id,
+    name,
+    accent: /^#[0-9a-f]{6}$/i.test(value.accent) ? value.accent : learningChannelAccent(id),
+    url: `https://www.youtube.com/channel/${id}`,
+    watched: Math.max(0, Math.min(999, Number(value.watched) || 0)),
+    recentVideo: String(value.recentVideo || '').slice(0, 300)
+  };
+}
+
+function loadLearningPreferences() {
+  try {
+    const stored = JSON.parse(readFileSync(learningPreferencesPath, 'utf8'));
+    const channels = Array.isArray(stored?.channels) ? stored.channels.map(sanitizedLearningChannel).filter(Boolean) : [];
+    channels.forEach((channel) => discoveredLearningChannels.set(channel.id, channel));
+    const availableIds = new Set([...learningChannels, ...channels].map((channel) => channel.id));
+    if (Array.isArray(stored?.enabled)) {
+      learningEnabledChannelIds = new Set(stored.enabled.map(String).filter((id) => availableIds.has(id)));
+      const storedCatalogVersion = Math.max(0, Number(stored.catalogVersion) || 0);
+      learningChannels
+        .filter((channel) => Number(channel.addedIn) > storedCatalogVersion)
+        .forEach((channel) => learningEnabledChannelIds.add(channel.id));
+    }
+  } catch {}
+}
+
+function saveLearningPreferences() {
+  const payload = JSON.stringify({
+    catalogVersion: learningCatalogVersion,
+    enabled: [...learningEnabledChannelIds],
+    channels: [...discoveredLearningChannels.values()]
+  });
+  learningPreferencesWriteQueue = learningPreferencesWriteQueue.then(async () => {
+    await fsPromises.mkdir(path.dirname(learningPreferencesPath), { recursive: true });
+    const temporaryPath = `${learningPreferencesPath}.tmp`;
+    await fsPromises.writeFile(temporaryPath, payload, { encoding: 'utf8', mode: 0o600 });
+    await fsPromises.rename(temporaryPath, learningPreferencesPath);
+  }).catch((error) => console.error('Could not save Still learning channels:', error));
+  return learningPreferencesWriteQueue;
+}
+
+function learningFilterConfig(homeFeed = null, musicHomeFeed = null) {
+  const available = [...learningChannels, ...discoveredLearningChannels.values()];
+  return {
+    enabled: available.filter((channel) => learningEnabledChannelIds.has(channel.id)).map((channel) => ({
+      id: channel.id,
+      name: channel.name
+    })),
+    musicChannels: musicChannels.map((channel) => ({ id: channel.id, name: channel.name })),
+    learnPageUrl,
+    homeFeed: homeFeed || (
+      learningHomeFeedCache.signature === learningHomeFeedSignature()
+        ? { videos: learningHomeFeedCache.videos, failed: learningHomeFeedCache.failed, loading: false }
+        : { videos: [], failed: [], loading: true }
+    ),
+    musicHomeFeed: musicHomeFeed || (
+      musicHomeFeedCache.signature === musicHomeFeedSignature()
+        ? { videos: musicHomeFeedCache.videos, failed: musicHomeFeedCache.failed, loading: false }
+        : { videos: [], failed: [], loading: true }
+    )
+  };
+}
 
 function loadPermissionPreferences() {
   try {
@@ -81,7 +244,7 @@ function savePermissionPreferences() {
   permissionWriteQueue = permissionWriteQueue.then(async () => {
     await fsPromises.mkdir(path.dirname(permissionPreferencesPath), { recursive: true });
     const temporaryPath = `${permissionPreferencesPath}.tmp`;
-    await fsPromises.writeFile(temporaryPath, serialized, 'utf8');
+    await fsPromises.writeFile(temporaryPath, serialized, { encoding: 'utf8', mode: 0o600 });
     await fsPromises.rename(temporaryPath, permissionPreferencesPath);
   }).catch((error) => console.error('Could not save Still site permissions:', error));
 }
@@ -92,6 +255,76 @@ function normalizedWebOrigin(value) {
     return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.origin : '';
   } catch {
     return '';
+  }
+}
+
+function isKnownGuest(webContents) {
+  return Boolean(webContents && guestContentsById.get(webContents.id) === webContents);
+}
+
+function isAllowedPopupUrl(value) {
+  if (value === 'about:blank') return true;
+  try {
+    return ['http:', 'https:', 'blob:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+function configureSitePopups(opener, browsingSession) {
+  opener.setWindowOpenHandler(({ url }) => {
+    if (!isAllowedPopupUrl(url)) {
+      if (externalApplicationUrl(url)) requestExternalApplication(url);
+      return { action: 'deny' };
+    }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 900,
+        height: 720,
+        minWidth: 420,
+        minHeight: 320,
+        frame: true,
+        show: true,
+        autoHideMenuBar: true,
+        backgroundColor: '#000000',
+        webPreferences: {
+          session: browsingSession,
+          nodeIntegration: false,
+          nodeIntegrationInSubFrames: false,
+          nodeIntegrationInWorker: false,
+          contextIsolation: true,
+          sandbox: true,
+          webSecurity: true,
+          allowRunningInsecureContent: false,
+          webviewTag: false,
+          safeDialogs: true
+        }
+      }
+    };
+  });
+
+  opener.on('did-create-window', (popup) => {
+    const contents = popup.webContents;
+    guestContentsById.set(contents.id, contents);
+    contents.once('destroyed', () => guestContentsById.delete(contents.id));
+    const guardNavigation = (event, navigation) => {
+      const url = typeof navigation === 'string' ? navigation : navigation?.url;
+      if (isAllowedPopupUrl(url)) return;
+      event.preventDefault();
+      if (externalApplicationUrl(url)) requestExternalApplication(url);
+    };
+    contents.on('will-navigate', guardNavigation);
+    contents.on('will-redirect', guardNavigation);
+    configureSitePopups(contents, browsingSession);
+  });
+}
+
+function isTrustedLocalPage(url, expectedPath) {
+  try {
+    return path.normalize(fileURLToPath(url)) === path.normalize(expectedPath);
+  } catch {
+    return false;
   }
 }
 
@@ -159,6 +392,10 @@ function finishPermissionRequest(id, decision = 'dismiss') {
 }
 
 function requestSitePermission(webContents, permission, callback, details = {}) {
+  if (!isKnownGuest(webContents)) {
+    callback(false);
+    return;
+  }
   if (permission === 'fullscreen' || permission === 'clipboard-sanitized-write') {
     callback(true);
     return;
@@ -369,9 +606,40 @@ function isYouTubePage(url) {
   }
 }
 
+function isYouTubeHome(url) {
+  try {
+    const parsed = new URL(url);
+    return isYouTubePage(url) && parsed.pathname === '/';
+  } catch {
+    return false;
+  }
+}
+
+function executeYouTubeScripts(guest, nextConfig, includeWatchUi = true) {
+  if (guest.isDestroyed()) return Promise.resolve();
+  const config = JSON.stringify(nextConfig).replace(/</g, '\\u003c');
+  return guest.executeJavaScript(`window.__stillLearningFilterConfig = ${config};`, true)
+    .then(() => guest.executeJavaScript(youtubeFilterScript, true))
+    .then(() => guest.executeJavaScript(youtubeHomeScript, true))
+    .then(() => includeWatchUi && guest.executeJavaScript(youtubeUiScript, true));
+}
+
 function injectYouTubeUi(guest) {
   if (guest.isDestroyed() || !isYouTubePage(guest.getURL())) return;
-  guest.executeJavaScript(youtubeUiScript, true).catch(() => {});
+  const startingUrl = guest.getURL();
+  executeYouTubeScripts(guest, learningFilterConfig()).catch(() => {});
+  if (!isYouTubeHome(startingUrl)) return;
+
+  Promise.all([refreshLearningHomeFeed(), refreshMusicHomeFeed()]).then(([homeFeed, musicHomeFeed]) => {
+    if (guest.isDestroyed() || !isYouTubeHome(guest.getURL())
+        || homeFeed.signature !== learningHomeFeedSignature()
+        || musicHomeFeed.signature !== musicHomeFeedSignature()) return;
+    return executeYouTubeScripts(guest, learningFilterConfig(homeFeed, musicHomeFeed), false);
+  }).catch(() => {});
+}
+
+function refreshYouTubeFilters() {
+  for (const guest of guestContentsById.values()) injectYouTubeUi(guest);
 }
 
 function suggestionLabel(url) {
@@ -446,10 +714,355 @@ function rankedStartSuggestions(value, limit = 5) {
 }
 
 function isTrustedStartSender(event) {
+  return isKnownGuest(event.sender) && isTrustedLocalPage(event.senderFrame.url, startPagePath);
+}
+
+function isTrustedLearnSender(event) {
+  return isKnownGuest(event.sender) && isTrustedLocalPage(event.senderFrame.url, learnPagePath);
+}
+
+function decodeXml(value) {
+  return String(value || '')
+    .replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/i, '$1')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
+function xmlValue(block, tag) {
+  const match = String(block || '').match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return decodeXml(match?.[1]);
+}
+
+function parseYoutubeFeed(xml, expectedChannel) {
+  return [...String(xml || '').matchAll(/<entry>([\s\S]*?)<\/entry>/gi)].map((match) => {
+    const entry = match[1];
+    const videoId = xmlValue(entry, 'yt:videoId');
+    const published = xmlValue(entry, 'published');
+    const views = Number(entry.match(/<media:statistics\b[^>]*\bviews="(\d+)"/i)?.[1]);
+    if (!/^[\w-]{11}$/.test(videoId) || !Number.isFinite(Date.parse(published))) return null;
+    return {
+      id: videoId,
+      channelId: expectedChannel.id,
+      channel: expectedChannel.name,
+      title: xmlValue(entry, 'title').slice(0, 500),
+      published,
+      meta: Number.isSafeInteger(views) && views >= 0
+        ? `${new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(views)} views`
+        : '',
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+    };
+  }).filter(Boolean);
+}
+
+function normalizedLearningAvatar(value) {
+  const decoded = String(value || '').replace(/\\u0026/g, '&').replace(/\\\//g, '/');
   try {
-    return path.normalize(fileURLToPath(event.senderFrame.url)) === path.normalize(startPagePath);
+    const parsed = new URL(decoded);
+    if (!['yt3.googleusercontent.com', 'yt3.ggpht.com'].includes(parsed.hostname.toLowerCase())) return '';
+    return decoded.replace(/=s\d+(?:-[^/?#"']*)?$/i, '=s176-c-k-c0x00ffffff-no-rj');
   } catch {
-    return false;
+    return '';
+  }
+}
+
+function learningAvatarFromHtml(html) {
+  const source = String(html || '');
+  const candidates = [
+    source.match(/<meta\s+property="og:image"\s+content="([^"]+)/i)?.[1],
+    source.match(/<meta\s+content="([^"]+)"\s+property="og:image"/i)?.[1],
+    source.match(/<meta\s+name="twitter:image"\s+content="([^"]+)/i)?.[1],
+    source.match(/"avatar":\{"thumbnails":\[\{"url":"([^"]+)/)?.[1],
+    source.match(/"avatarViewModel":\{"image":\{"sources":\[\{"url":"([^"]+)/)?.[1],
+    source.match(/"decoratedAvatarViewModel":\{"avatar":\{"avatarViewModel":\{"image":\{"sources":\[\{"url":"([^"]+)/)?.[1]
+  ];
+  for (const candidate of candidates) {
+    const avatar = normalizedLearningAvatar(candidate);
+    if (avatar) return avatar;
+  }
+  return '';
+}
+
+async function fetchLearningChannelAvatar(channel) {
+  const cached = learningAvatarCache.get(channel.id);
+  const cacheLifetime = cached?.url ? 24 * 60 * 60 * 1000 : 60 * 1000;
+  if (cached && Date.now() - cached.time < cacheLifetime) return cached.url;
+  let url = '';
+  try {
+    const response = await fetch(`https://www.youtube.com/channel/${channel.id}`, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12000)
+    });
+    if (response.ok) {
+      const html = await response.text();
+      url = learningAvatarFromHtml(html);
+    }
+  } catch {}
+  learningAvatarCache.set(channel.id, { time: Date.now(), url });
+  return url;
+}
+
+async function fetchLearningChannel(channel) {
+  const cached = learningFeedCache.get(channel.id);
+  if (cached && Date.now() - cached.time < 45 * 1000) return cached.videos;
+  const avatarPromise = fetchLearningChannelAvatar(channel);
+  const response = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`, {
+    headers: { Accept: 'application/atom+xml, application/xml;q=0.9' },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(12000)
+  });
+  if (!response.ok) throw new Error(`YouTube feed returned HTTP ${response.status}.`);
+  const xml = await response.text();
+  if (xml.length > 2_000_000) throw new Error('YouTube feed was unexpectedly large.');
+  let videos = parseYoutubeFeed(xml, channel);
+  const avatar = await avatarPromise.catch(() => '');
+  if (avatar) videos = videos.map((video) => ({ ...video, avatar }));
+  if (Array.isArray(channel.feedKeywords) && channel.feedKeywords.length) {
+    const terms = channel.feedKeywords.map((term) => String(term).toLocaleLowerCase());
+    videos = videos.filter((video) => terms.some((term) => video.title.toLocaleLowerCase().includes(term)));
+  }
+  learningFeedCache.set(channel.id, { time: Date.now(), videos });
+  return videos;
+}
+
+function enabledLearningChannels() {
+  return [...learningChannels, ...discoveredLearningChannels.values()]
+    .filter((channel) => learningEnabledChannelIds.has(channel.id));
+}
+
+function learningHomeFeedSignature() {
+  return enabledLearningChannels().map((channel) => channel.id).sort().join(',');
+}
+
+function rotateLearningVideos(videos, channels) {
+  const buckets = new Map(channels.map((channel) => [channel.id, []]));
+  for (const video of videos) {
+    if (buckets.has(video.channelId)) buckets.get(video.channelId).push(video);
+  }
+  buckets.forEach((bucket) => bucket.sort((left, right) => Date.parse(right.published) - Date.parse(left.published)));
+  const active = [...buckets.values()].filter((bucket) => bucket.length)
+    .sort((left, right) => Date.parse(right[0].published) - Date.parse(left[0].published));
+  const mixed = [];
+  for (let round = 0; active.some((bucket) => bucket[round]); round += 1) {
+    active.forEach((bucket) => {
+      if (bucket[round]) mixed.push(bucket[round]);
+    });
+  }
+  return mixed;
+}
+
+async function refreshLearningHomeFeed() {
+  const channels = enabledLearningChannels();
+  const signature = learningHomeFeedSignature();
+  if (learningHomeFeedCache.signature === signature && Date.now() - learningHomeFeedCache.time < 45 * 1000) {
+    return { signature, videos: learningHomeFeedCache.videos, failed: learningHomeFeedCache.failed, loading: false };
+  }
+  if (learningHomeFeedJob?.signature === signature) return learningHomeFeedJob.promise;
+
+  const promise = (async () => {
+    const results = await Promise.allSettled(channels.map(fetchLearningChannel));
+    const videos = [];
+    const failed = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') videos.push(...result.value);
+      else failed.push(channels[index].name);
+    });
+    const mixed = rotateLearningVideos(videos, channels).slice(0, 180);
+    if (learningHomeFeedSignature() === signature) {
+      learningHomeFeedCache = { signature, time: Date.now(), videos: mixed, failed };
+    }
+    return { signature, videos: mixed, failed, loading: false };
+  })();
+  learningHomeFeedJob = { signature, promise };
+  try {
+    return await promise;
+  } finally {
+    if (learningHomeFeedJob?.promise === promise) learningHomeFeedJob = null;
+  }
+}
+
+function musicHomeFeedSignature() {
+  return musicChannels.map((channel) => channel.id).sort().join(',');
+}
+
+async function refreshMusicHomeFeed() {
+  const signature = musicHomeFeedSignature();
+  if (musicHomeFeedCache.signature === signature && Date.now() - musicHomeFeedCache.time < 45 * 1000) {
+    return { signature, videos: musicHomeFeedCache.videos, failed: musicHomeFeedCache.failed, loading: false };
+  }
+  if (musicHomeFeedJob?.signature === signature) return musicHomeFeedJob.promise;
+
+  const promise = (async () => {
+    const results = await Promise.allSettled(musicChannels.map(fetchLearningChannel));
+    const videos = [];
+    const failed = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') videos.push(...result.value);
+      else failed.push(musicChannels[index].name);
+    });
+    const mixed = rotateLearningVideos(videos, musicChannels).slice(0, 180);
+    if (musicHomeFeedSignature() === signature) {
+      musicHomeFeedCache = { signature, time: Date.now(), videos: mixed, failed };
+    }
+    return { signature, videos: mixed, failed, loading: false };
+  })();
+  musicHomeFeedJob = { signature, promise };
+  try {
+    return await promise;
+  } finally {
+    if (musicHomeFeedJob?.promise === promise) musicHomeFeedJob = null;
+  }
+}
+
+const learningHomeRefreshTimer = setInterval(() => {
+  for (const guest of guestContentsById.values()) {
+    if (!guest.isDestroyed() && isYouTubeHome(guest.getURL())) injectYouTubeUi(guest);
+  }
+}, 60 * 1000);
+learningHomeRefreshTimer.unref?.();
+
+function recentYoutubeHistory(limit = 18) {
+  const source = runtimeSuggestionHistory.length ? runtimeSuggestionHistory : importedHistory;
+  const seen = new Set();
+  const videos = [];
+  for (const entry of source) {
+    try {
+      const url = new URL(entry?.url);
+      const host = url.hostname.toLowerCase();
+      const id = url.pathname === '/watch' && (host === 'youtube.com' || host.endsWith('.youtube.com'))
+        ? url.searchParams.get('v')
+        : '';
+      if (!/^[\w-]{11}$/.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      videos.push({ id, title: String(entry.title || '').replace(/\s+-\s+YouTube$/i, '').slice(0, 300) });
+      if (videos.length >= limit) break;
+    } catch {}
+  }
+  return videos;
+}
+
+function learningMetadataBinary() {
+  const binaryName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, binaryName)
+    : path.join(__dirname, '..', 'build', 'vendor', binaryName);
+  return existsSync(candidate) ? candidate : '';
+}
+
+function learningChannelAccent(channelId) {
+  const palette = ['#7c5cff', '#ff8a4c', '#2ec4a6', '#4e8cff', '#ec5da7', '#d29b6e', '#79c267', '#d9b642'];
+  const hash = [...channelId].reduce((value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0, 0);
+  return palette[hash % palette.length];
+}
+
+function inspectYoutubeBatch(executable, videos) {
+  return new Promise((resolve) => {
+    if (!videos.length) return resolve([]);
+    const args = [
+      '--no-playlist',
+      '--skip-download',
+      '--no-warnings',
+      '--ignore-errors',
+      '--socket-timeout', '10',
+      '--retries', '1',
+      '--print', '%(channel_id)s\t%(channel)s\t%(channel_url)s\t%(id)s',
+      ...videos.map((video) => `https://www.youtube.com/watch?v=${video.id}`)
+    ];
+    const child = spawn(executable, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const rows = output.split(/\r?\n/).map((line) => {
+        const [id, name, url, videoId] = line.split('\t');
+        if (!/^UC[\w-]{22}$/.test(id) || !/^[\w-]{11}$/.test(videoId)) return null;
+        return {
+          id,
+          name: String(name || 'YouTube channel').slice(0, 160),
+          url: /^https:\/\/www\.youtube\.com\/channel\/UC[\w-]{22}$/.test(url) ? url : `https://www.youtube.com/channel/${id}`,
+          videoId
+        };
+      }).filter(Boolean);
+      resolve(rows);
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish();
+    }, 45000);
+    child.stdout.on('data', (chunk) => {
+      if (output.length < 512_000) output += chunk.toString('utf8');
+    });
+    child.on('error', finish);
+    child.on('close', finish);
+  });
+}
+
+async function discoverLearningChannels(force = false) {
+  const videos = recentYoutubeHistory();
+  const signature = videos.map((video) => video.id).join(',');
+  if (!force && learningDiscoveryCache.result && learningDiscoveryCache.signature === signature
+    && Date.now() - learningDiscoveryCache.time < 10 * 60 * 1000) {
+    return learningDiscoveryCache.result;
+  }
+  if (learningDiscoveryJob) return learningDiscoveryJob;
+
+  learningDiscoveryJob = (async () => {
+    const executable = learningMetadataBinary();
+    if (!videos.length) return { channels: [], scanned: 0, message: 'No watched YouTube videos were found in local history yet.' };
+    if (!executable) return { channels: [], scanned: videos.length, message: 'Channel discovery is unavailable in this Still build.' };
+
+    const batchSize = 6;
+    const batches = [];
+    for (let index = 0; index < videos.length; index += batchSize) batches.push(videos.slice(index, index + batchSize));
+    const resolvedRows = (await Promise.all(batches.map((batch) => inspectYoutubeBatch(executable, batch)))).flat();
+    const seedIds = new Set(learningChannels.map((channel) => channel.id));
+    const historyOrder = new Map(videos.map((video, index) => [video.id, index]));
+    const historyTitles = new Map(videos.map((video) => [video.id, video.title]));
+    const found = new Map();
+    for (const row of resolvedRows) {
+      if (seedIds.has(row.id)) continue;
+      const existing = found.get(row.id);
+      const order = historyOrder.get(row.videoId) ?? videos.length;
+      if (existing) {
+        existing.watched += 1;
+        existing.order = Math.min(existing.order, order);
+        continue;
+      }
+      found.set(row.id, {
+        id: row.id,
+        name: row.name,
+        accent: learningChannelAccent(row.id),
+        url: row.url,
+        watched: 1,
+        recentVideo: historyTitles.get(row.videoId) || '',
+        order
+      });
+    }
+    const channels = [...found.values()].sort((left, right) => left.order - right.order).slice(0, 14).map(({ order, ...channel }) => channel);
+    discoveredLearningChannels.clear();
+    channels.forEach((channel) => discoveredLearningChannels.set(channel.id, channel));
+    saveLearningPreferences();
+    const result = { channels, scanned: videos.length, message: '' };
+    learningDiscoveryCache = { signature, time: Date.now(), result };
+    return result;
+  })();
+
+  try {
+    return await learningDiscoveryJob;
+  } finally {
+    learningDiscoveryJob = null;
   }
 }
 
@@ -463,11 +1076,8 @@ function sendMouseNavigation(direction, source = 'unknown') {
     && now - lastMouseNavigation.time < 70;
   if (duplicateFromAnotherSource || switchBounce) return;
   lastMouseNavigation = { direction, source, time: now };
-  const guest = guestContentsById.get(activeGuestId);
-  if (!guest || guest.isDestroyed()) return;
-  const history = guest.navigationHistory;
-  if (direction === 'back' && history.canGoBack()) history.goBack();
-  if (direction === 'forward' && history.canGoForward()) history.goForward();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('app:shortcut', direction === 'back' ? 'back' : 'forward');
 }
 
 function handleModifierWheel(kind, direction, source) {
@@ -559,20 +1169,31 @@ function createWindow() {
     minWidth: 820,
     minHeight: 560,
     icon: path.join(__dirname, '..', 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#101112' : '#f5f5f3',
+    backgroundColor: '#000000',
     frame: false,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
       contextIsolation: true,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      safeDialogs: true,
       webviewTag: true
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.loadFile(shellPagePath);
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedLocalPage(url, shellPagePath)) event.preventDefault();
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('did-finish-load', () => {
+    announceStagedUpdate();
     if (!pendingExternalUrl) return;
     const url = pendingExternalUrl;
     pendingExternalUrl = '';
@@ -586,14 +1207,37 @@ function createWindow() {
     if (command === 'browser-forward') sendMouseNavigation('forward', 'app-command');
   });
 
-  mainWindow.webContents.on('will-attach-webview', (_event, webPreferences, params) => {
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    if (params.partition !== browsingPartition) {
+      event.preventDefault();
+      return;
+    }
     webPreferences.nodeIntegration = false;
+    webPreferences.nodeIntegrationInSubFrames = false;
+    webPreferences.nodeIntegrationInWorker = false;
     webPreferences.contextIsolation = true;
     webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.allowRunningInsecureContent = false;
+    webPreferences.experimentalFeatures = false;
+    webPreferences.safeDialogs = true;
     delete webPreferences.preload;
+    delete params.preload;
   });
 
   mainWindow.webContents.on('did-attach-webview', (_event, guest) => {
+    guest.on('enter-html-full-screen', () => {
+      if (!mainWindow?.isDestroyed() && !mainWindow.isFullScreen()) {
+        guestForcedFullscreen = true;
+        mainWindow.setFullScreen(true);
+      }
+    });
+    guest.on('leave-html-full-screen', () => {
+      if (guestForcedFullscreen && mainWindow && !mainWindow.isDestroyed()) {
+        guestForcedFullscreen = false;
+        mainWindow.setFullScreen(false);
+      }
+    });
     guest.on('preload-error', (_preloadEvent, preloadPath, error) => {
       console.error(`Guest preload failed (${preloadPath}):`, error);
     });
@@ -661,14 +1305,9 @@ function createWindow() {
       }
     });
 
-    guest.setWindowOpenHandler(({ url, disposition }) => {
-      if (/^https?:\/\//i.test(url)) {
-        mainWindow.webContents.send('slot:new-window', { url, disposition });
-      } else {
-        requestExternalApplication(url);
-      }
-      return { action: 'deny' };
-    });
+    // Sites use blank, scriptable child windows for sign-in and downloads. A
+    // slot cannot preserve window.opener, form POSTs, or later child navigation.
+    configureSitePopups(guest, session.fromPartition(browsingPartition));
 
     guest.on('before-input-event', (event, input) => {
       const inputKey = input.key.toLowerCase();
@@ -683,7 +1322,11 @@ function createWindow() {
       if (input.type !== 'keyDown' && input.type !== 'rawKeyDown') return;
       const key = inputKey;
       let shortcut = '';
-      if (input.control && key === 'l') shortcut = 'location';
+      if (input.control && !input.alt && ['+', '=', 'add'].includes(key)) shortcut = 'zoom-in';
+      else if (input.control && !input.alt && ['-', 'subtract'].includes(key)) shortcut = 'zoom-out';
+      else if (input.control && !input.alt && key === '0') shortcut = 'zoom-reset';
+      else if (input.control && key === 'l') shortcut = 'location';
+      else if (input.control && (key === ',' || key === 'comma')) shortcut = 'browser-settings';
       else if (input.control && key === 't') shortcut = 'new-slot';
       else if (input.control && key === 'w') shortcut = 'close-slot';
       else if (input.control && input.shift && key === 'r') shortcut = 'hard-reload';
@@ -707,8 +1350,76 @@ function createWindow() {
   });
 }
 
+function stagedUpdateDirectory() {
+  if (process.platform !== 'win32' || !app.isPackaged) return '';
+  const current = path.dirname(process.execPath);
+  if (path.basename(current).toLowerCase() !== 'win-unpacked') return '';
+  const parent = path.dirname(current);
+  let names;
+  try { names = readdirSync(parent, { withFileTypes: true }); } catch { return ''; }
+  const candidates = names
+    .filter((entry) => entry.isDirectory() && /^win-unpacked-update[-\w]*$/i.test(entry.name))
+    .map((entry) => path.join(parent, entry.name))
+    .filter((directory) => existsSync(path.join(directory, 'Still.exe'))
+      && existsSync(path.join(directory, 'resources', 'app.asar'))
+      && !existsSync(path.join(directory, '.still-update-applied')))
+    .sort().reverse();
+  return candidates[0] || '';
+}
+
+function previousUpdateFailed() {
+  if (process.platform !== 'win32' || !app.isPackaged) return false;
+  try {
+    const log = readFileSync(path.join(path.dirname(process.execPath), '..', 'still-update-last.log'), 'utf8');
+    const lastStart = log.lastIndexOf(' START ');
+    const latestAttempt = lastStart < 0 ? '' : log.slice(lastStart);
+    return latestAttempt.includes(' FAIL ') && !latestAttempt.includes(' SUCCESS ');
+  } catch {
+    return false;
+  }
+}
+
+function announceStagedUpdate() {
+  const staged = stagedUpdateDirectory();
+  if (!staged || staged === updateNoticePath || !mainWindow || mainWindow.isDestroyed()) return;
+  updateNoticePath = staged;
+  mainWindow.webContents.send('app:update-ready', staged);
+}
+
+ipcMain.handle('app:install-update', async (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return false;
+  const staged = stagedUpdateDirectory();
+  const script = path.join(process.resourcesPath, 'apply-update-after-exit.ps1');
+  if (!staged || !existsSync(script)) return false;
+  const childEnvironment = { ...process.env };
+  delete childEnvironment.ELECTRON_RUN_AS_NODE;
+  try {
+    const helper = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-CurrentDirectory', path.dirname(process.execPath),
+      '-StagedDirectory', staged,
+      '-ExpectedProcessId', String(process.pid)
+    ], { detached: true, windowsHide: true, stdio: 'ignore', env: childEnvironment });
+    return await new Promise((resolve) => {
+      helper.once('error', (error) => {
+        console.error(`Could not launch update helper: ${error.message}`);
+        resolve(false);
+      });
+      helper.once('spawn', () => {
+        helper.unref();
+        resolve(true);
+        setTimeout(() => app.quit(), 200);
+      });
+    });
+  } catch (error) {
+    console.error(`Could not launch update helper: ${error.message}`);
+    return false;
+  }
+});
+
 function configureBrowsingSession() {
-  const browsingSession = session.fromPartition('persist:focus');
+  const browsingSession = session.fromPartition(browsingPartition);
   // Google rejects or degrades embedded-browser identifiers. Advertise the
   // Chromium engine itself, while keeping the real engine/version intact.
   const chromiumUserAgent = app.userAgentFallback
@@ -722,10 +1433,30 @@ function configureBrowsingSession() {
     id: 'still-guest-ui',
     filePath: path.join(__dirname, 'start-preload.js')
   });
+  browsingSession.webRequest.onBeforeSendHeaders(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const requestHeaders = { ...details.requestHeaders };
+      for (const header of Object.keys(requestHeaders)) {
+        // Chromium variations identify experiment cohorts and provide no
+        // user-facing browsing functionality.
+        if (header.toLowerCase() === 'x-client-data') delete requestHeaders[header];
+        if (header.toLowerCase() === 'sec-gpc') delete requestHeaders[header];
+      }
+      requestHeaders['Sec-GPC'] = '1';
+      callback({ requestHeaders });
+    }
+  );
+  // Hardware-device APIs have no UI in Still. Deny their secondary permission
+  // path explicitly so a previously remembered Chromium choice cannot bypass the
+  // browser's permission handler.
+  browsingSession.setDevicePermissionHandler(() => false);
+  browsingSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
   browsingSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     requestSitePermission(webContents, permission, callback, details);
   });
   browsingSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (!isKnownGuest(webContents)) return false;
     if (permission === 'fullscreen' || permission === 'clipboard-sanitized-write') return true;
     const origin = permissionOrigin(webContents, requestingOrigin, details);
     const requestedKinds = permissionKeys(permission, details);
@@ -736,23 +1467,115 @@ function configureBrowsingSession() {
   return browsingSession;
 }
 
-ipcMain.handle('app:bootstrap', () => ({
-  bookmarks: importedBookmarks,
-  history: importedHistory,
-  importReport,
-  startPageUrl,
-  theme: nativeTheme.themeSource,
-  downloads: downloadManager?.list() || []
-}));
+ipcMain.handle('app:bootstrap', (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return null;
+  return {
+    bookmarks: importedBookmarks,
+    history: importedHistory,
+    importReport,
+    startPageUrl,
+    editorPageUrl,
+    learnPageUrl,
+    searchBaseUrl: localSearchBaseUrl,
+    searchAvailable: Boolean(localSearch),
+    updateAvailable: Boolean(stagedUpdateDirectory()),
+    updatePath: stagedUpdateDirectory(),
+    updateFailed: previousUpdateFailed(),
+    theme: nativeTheme.themeSource,
+    downloads: downloadManager?.list() || []
+  };
+});
 
 ipcMain.handle('start:suggestions', (event, query) => {
   if (!isTrustedStartSender(event)) return [];
   return rankedStartSuggestions(query);
 });
 
-ipcMain.handle('theme:set', (_event, theme) => {
+ipcMain.handle('search:base-url', (event) => {
+  if (!isTrustedStartSender(event)) return '';
+  return localSearchBaseUrl;
+});
+
+ipcMain.handle('learn:catalog', (event) => {
+  if (!isTrustedLearnSender(event)) return [];
+  return learningChannels;
+});
+
+ipcMain.handle('learn:discover', async (event, force) => {
+  if (!isTrustedLearnSender(event)) return { channels: [], scanned: 0, message: '' };
+  return discoverLearningChannels(force === true);
+});
+
+ipcMain.handle('learn:selection', (event) => {
+  if (!isTrustedLearnSender(event)) return [];
+  return [...learningEnabledChannelIds];
+});
+
+ipcMain.handle('learn:selection-set', async (event, requestedIds) => {
+  if (!isTrustedLearnSender(event) || !Array.isArray(requestedIds)) return [...learningEnabledChannelIds];
+  const availableIds = new Set([...learningChannels, ...discoveredLearningChannels.values()].map((channel) => channel.id));
+  learningEnabledChannelIds = new Set([...new Set(requestedIds.map(String))].filter((id) => availableIds.has(id)).slice(0, 80));
+  learningHomeFeedCache = { signature: '', time: 0, videos: [], failed: [] };
+  await saveLearningPreferences();
+  refreshYouTubeFilters();
+  return [...learningEnabledChannelIds];
+});
+
+ipcMain.on('learn:open', (event) => {
+  if (!isKnownGuest(event.sender) || !isYouTubePage(event.senderFrame.url)) return;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:shortcut', 'open-learn');
+});
+
+ipcMain.handle('learn:feed', async (event, requestedIds) => {
+  if (!isTrustedLearnSender(event) || !Array.isArray(requestedIds)) return { videos: [], failed: [] };
+  const availableChannels = [...learningChannels, ...discoveredLearningChannels.values()];
+  const allowedIds = new Set(availableChannels.map((channel) => channel.id));
+  const selectedIds = [...new Set(requestedIds.map(String))].filter((id) => allowedIds.has(id)).slice(0, 80);
+  const selectedChannels = selectedIds.map((id) => availableChannels.find((channel) => channel.id === id));
+  const results = await Promise.allSettled(selectedChannels.map(fetchLearningChannel));
+  const videos = [];
+  const failed = [];
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') videos.push(...result.value);
+    else failed.push(selectedChannels[index].name);
+  });
+  videos.sort((left, right) => Date.parse(right.published) - Date.parse(left.published));
+  return { videos: videos.slice(0, 120), failed };
+});
+
+ipcMain.handle('theme:set', (event, theme) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return nativeTheme.themeSource;
   nativeTheme.themeSource = ['light', 'dark', 'system'].includes(theme) ? theme : 'system';
   return nativeTheme.themeSource;
+});
+
+ipcMain.handle('slot:hard-reload', async (event, guestId) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return false;
+  const guest = guestContentsById.get(Number(guestId));
+  if (!guest || guest.isDestroyed()) return false;
+
+  let origin = '';
+  let url = '';
+  try {
+    url = guest.getURL();
+    origin = normalizedWebOrigin(url);
+  } catch {}
+
+  const browsingSession = guest.session;
+  const clearing = [browsingSession.clearCache()];
+  if (url && typeof browsingSession.clearCodeCaches === 'function') {
+    clearing.push(browsingSession.clearCodeCaches({ urls: [url] }));
+  }
+  if (origin) {
+    clearing.push(browsingSession.clearStorageData({
+      origin,
+      storages: ['serviceworkers', 'cachestorage']
+    }));
+  }
+  await Promise.allSettled(clearing);
+  if (guest.isDestroyed()) return false;
+  guest.reloadIgnoringCache();
+  return true;
 });
 
 ipcMain.handle('downloads:action', async (event, id, action) => {
@@ -805,10 +1628,48 @@ ipcMain.handle('browser:default-settings', async (event) => {
   return openDefaultBrowserSettings();
 });
 
-ipcMain.on('window:action', (_event, action) => {
-  if (!mainWindow) return;
+ipcMain.handle('browser:open-external', async (event, url) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || !/^https?:\/\//i.test(String(url || ''))) return false;
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('browser:open-edge', async (event, url) => {
+  if (process.platform !== 'win32' || !mainWindow || event.sender !== mainWindow.webContents || !/^https?:\/\//i.test(String(url || ''))) return false;
+  try {
+    await shell.openExternal(`microsoft-edge:${url}`);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('browser:copy-url', (event, url) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || !/^https?:\/\//i.test(String(url || ''))) return false;
+  clipboard.writeText(url);
+  return true;
+});
+
+ipcMain.handle('security:allow-certificate', (event, url) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return false;
+  try {
+    const parsed = new URL(String(url || ''));
+    if (parsed.protocol !== 'https:') return false;
+    temporaryCertificateExceptions.add(parsed.origin);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.on('window:action', (event, action) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return;
   if (action === 'minimize') mainWindow.minimize();
-  if (action === 'maximize') mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+  if (action === 'maximize') mainWindow.setFullScreen(!mainWindow.isFullScreen());
   if (action === 'close') mainWindow.close();
 });
 
@@ -869,8 +1730,24 @@ app.on('open-url', (event, url) => {
   openExternalUrl(url);
 });
 
+app.on('certificate-error', (event, webContents, url, _error, _certificate, callback) => {
+  event.preventDefault();
+  let origin = '';
+  try { origin = new URL(url).origin; } catch {}
+  callback(Boolean(origin && isKnownGuest(webContents) && temporaryCertificateExceptions.has(origin)));
+});
+
 app.whenReady().then(async () => {
   registerStillBrowser();
+  const localSearchPromise = startLocalSearxng({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    userDataPath
+  }).catch((error) => {
+    console.error(`Could not start Still Search: ${error.message}`);
+    return null;
+  });
   let operaExtensions = [];
   if (process.platform === 'win32') {
     importReport = await prepareOperaImport(userDataPath);
@@ -901,9 +1778,17 @@ app.whenReady().then(async () => {
     importReport.googleSessionRepair = await repairGoogleSession(browsingSession, userDataPath);
     importReport.extensions = await loadOperaExtensions(browsingSession, operaExtensions);
   }
+  localSearch = await localSearchPromise;
+  if (localSearch) localSearchBaseUrl = localSearch.baseUrl;
   createWindow();
+  updatePoll = setInterval(announceStagedUpdate, 15000);
+  updatePoll.unref();
   startMouseNavigationHelper();
 });
 
-app.on('before-quit', stopMouseNavigationHelper);
+app.on('before-quit', () => {
+  if (updatePoll) clearInterval(updatePoll);
+  stopMouseNavigationHelper();
+  localSearch?.stop();
+});
 app.on('window-all-closed', () => app.quit());

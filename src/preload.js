@@ -2,7 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('focusSlots', {
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
   setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),
+  hardReload: (guestId) => ipcRenderer.invoke('slot:hard-reload', guestId),
   windowAction: (action) => ipcRenderer.send('window:action', action),
   setActiveGuest: (guestId) => ipcRenderer.send('slot:active-guest', guestId),
   setSuggestionHistory: (entries) => ipcRenderer.send('history:suggestions', entries),
@@ -13,6 +15,10 @@ contextBridge.exposeInMainWorld('focusSlots', {
   prepareFavicon: (source) => ipcRenderer.invoke('favicon:prepare', source),
   storeFavicon: (source, dataUrl) => ipcRenderer.invoke('favicon:store', source, dataUrl),
   openDefaultBrowserSettings: () => ipcRenderer.invoke('browser:default-settings'),
+  openInSystemBrowser: (url) => ipcRenderer.invoke('browser:open-external', url),
+  openInEdge: (url) => ipcRenderer.invoke('browser:open-edge', url),
+  copyPageUrl: (url) => ipcRenderer.invoke('browser:copy-url', url),
+  allowCertificateForUrl: (url) => ipcRenderer.invoke('security:allow-certificate', url),
   onNewWindow: (callback) => {
     const handler = (_event, details) => callback(details);
     ipcRenderer.on('slot:new-window', handler);
@@ -62,5 +68,10 @@ contextBridge.exposeInMainWorld('focusSlots', {
     const handler = (_event, url) => callback(url);
     ipcRenderer.on('app:open-url', handler);
     return () => ipcRenderer.removeListener('app:open-url', handler);
+  },
+  onUpdateReady: (callback) => {
+    const handler = (_event, stagedPath) => callback(stagedPath);
+    ipcRenderer.on('app:update-ready', handler);
+    return () => ipcRenderer.removeListener('app:update-ready', handler);
   }
 });
