@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Still Firefox Prototype",
+  "version": "0.1.0",
+  "description": "Isolated Firefox migration harness for Still's YouTube experience.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "still-prototype@tim.local",
+      "data_collection_permissions": { "required": ["none"] },
+      "strict_min_version": "156.0"
+    }
+  },
+  "permissions": ["scripting", "storage", "tabs"],
+  "host_permissions": ["*://*.youtube.com/*"],
+  "background": { "scripts": ["background.js"] },
+  "chrome_url_overrides": { "newtab": "newtab.html" },
+  "chrome_settings_overrides": {
+    "search_provider": {
+      "name": "Still Search",
+      "search_url": "http://127.0.0.1:48230/search?q={searchTerms}",
+      "is_default": true
+    }
+  },
+  "content_scripts": [{
+    "matches": ["*://*.youtube.com/*"],
+    "js": ["content-bridge.js"],
+    "run_at": "document_start"
+  }],
+  "action": { "default_title": "Manage Still channels" },
+  "options_ui": { "page": "manage.html", "open_in_tab": true }
+}

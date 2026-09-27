@@ -17,6 +17,9 @@
   "scripts": {
     "postinstall": "node scripts/fetch-yt-dlp.js",
     "start": "node scripts/build-searxng.js && electron .",
+    "firefox:build": "node firefox/build.js",
+    "firefox:lint": "node firefox/build.js && web-ext lint --source-dir firefox/build",
+    "firefox:run": "node firefox/build.js && node firefox/launcher.js",
     "build:mouse-helper": "dotnet publish native/mouse-navigation-helper/MouseNavigationHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -p:DebugType=None -p:DebugSymbols=false -o build/mouse-helper",
     "check": "node --check src/main.js && node --check src/renderer.js && node --check src/preload.js && node --check src/start.js && node --check src/start-preload.js && node --check src/editor.js && node --check src/learn.js && node --check src/import-opera-cookies.js && node --check src/import-opera-extensions.js && node --check src/import-opera-history.js && node --check src/download-manager.js && node --check src/youtube-downloader.js && node --check src/youtube-ui.js && node --check src/youtube-filter.js && node --check src/youtube-home.js && node --check src/migrate-opera.js && node --check src/repair-google-session.js && node --check src/default-browser.js && node --check src/searxng.js && node --check scripts/fetch-yt-dlp.js && node --check scripts/build-searxng.js && node --check scripts/package-app.js",
     "pack": "node scripts/package-app.js pack",
@@ -27,7 +30,8 @@
   },
   "devDependencies": {
     "electron": "43.4.0",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "web-ext": "^10.7.0"
   },
   "build": {
     "appId": "com.tim.still.v2",

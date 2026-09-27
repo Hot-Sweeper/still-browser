@@ -107,7 +107,14 @@ async function startLocalSearxng(options) {
   const executable = sidecarExecutable(options);
   if (!fs.existsSync(executable)) throw new Error('The bundled Still Search service is missing.');
 
-  const port = await availablePort();
+  const fixedPort = options.fixedPort;
+  if (fixedPort !== undefined && (!Number.isInteger(fixedPort) || fixedPort < 1024 || fixedPort > 65535)) {
+    throw new Error('Still Search was given an invalid port.');
+  }
+  if (fixedPort !== undefined && !(await canListen(fixedPort))) {
+    throw new Error(`Still Search port ${fixedPort} is already in use.`);
+  }
+  const port = fixedPort ?? await availablePort();
   const baseUrl = `http://127.0.0.1:${port}/`;
   const healthToken = crypto.randomBytes(24).toString('hex');
   const configuration = await settingsPath(options.userDataPath);

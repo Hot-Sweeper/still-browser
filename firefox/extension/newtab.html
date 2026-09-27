@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Still</title>
+  <link rel="icon" href="assets/still-icon.png">
+  <link rel="stylesheet" href="start.css">
+</head>
+<body>
+  <main>
+    <div class="brand" aria-label="Still">
+      <img src="assets/still-icon.png" alt="">
+      <span>Still</span>
+    </div>
+    <form id="search-form" autocomplete="off">
+      <label class="search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="10.8" cy="10.8" r="6.8"></circle>
+          <path d="m16 16 4.2 4.2"></path>
+        </svg>
+        <input id="search-input" autofocus autocomplete="off" spellcheck="false" aria-label="Search or enter an address" placeholder="Search or enter an address">
+      </label>
+      <div class="suggestions" id="suggestions" hidden></div>
+    </form>
+  </main>
+  <script src="newtab.js"></script>
+</body>
+</html>
