@@ -44,3 +44,19 @@ disables some safety features for development.
 
 Rollback: `git switch main` returns to the pre-migration branch, and the
 current installed Still remains unchanged throughout this prototype.
+
+## Native window work
+
+Firefox's actual browser window is defined by `browser/base/content/browser.xhtml`
+and `browser/base/content/navigator-toolbox.inc.xhtml`, with styling under
+`browser/themes/`. A sparse upstream checkout is at `D:\StillFirefoxSource`,
+branch `still-chrome`, pinned initially to upstream revision
+`cdc95c93c91b09d3a4c38be355b5ef5bfd631075`. This is separate from the
+Still repository; no browser chrome changes have been built or installed yet.
+
+The official MozillaBuild installer is downloaded to
+`D:\Still Firefox Prototype\MozillaBuildSetup-Latest.exe` and its Mozilla
+Corporation Authenticode signature has been verified. It has **not** been
+installed. Mozilla's Windows bootstrap can request elevated privileges to add
+antivirus exclusions; do not apply those silently. The native fork must be
+built and tested in an isolated profile before replacing the Electron window.
