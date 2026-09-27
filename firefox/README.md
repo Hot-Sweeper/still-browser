@@ -56,7 +56,9 @@ Still repository; no browser chrome changes have been built or installed yet.
 
 The official MozillaBuild installer is downloaded to
 `D:\Still Firefox Prototype\MozillaBuildSetup-Latest.exe` and its Mozilla
-Corporation Authenticode signature has been verified. It has **not** been
-installed. Mozilla's Windows bootstrap can request elevated privileges to add
-antivirus exclusions; do not apply those silently. The native fork must be
-built and tested in an isolated profile before replacing the Electron window.
+Corporation Authenticode signature has been verified. Its archive has been
+unpacked to `D:\MozillaBuild` as an isolated portable toolchain; Python and Bash
+start there. The installer itself has **not** run. Mozilla's Windows bootstrap
+can request elevated privileges to add antivirus exclusions; do not apply
+those silently. The native fork must be built and tested in an isolated profile
+before replacing the Electron window.
