@@ -55,7 +55,7 @@ New links occupy an empty slot. If all five are used, Still asks which slot to r
 
 ## Motion and performance
 
-The native tab switches immediately. Still then applies a cancellable transform to Gecko's composited tab panel; it never captures page screenshots, copies full-page textures through JavaScript, or waits for an animation to finish before selecting another tab. Elastic mode adds a small GPU-composited squish. Ripple adds a procedural WebGL light wave over the native page, **not pixel-level distortion of webpage content**. The shader reuses its program, geometry, and buffers, caps resolution, stops after 220 ms, and falls back to the transform if WebGL is unavailable or lost.
+The native tab selection changes immediately. Still prepares a directional slide and starts it when Gecko has the destination's layers ready. The outgoing native cached page slides away while the incoming page slides in; their transforms run on the compositor for 220–260 ms. Content focus changes do not cancel motion. Rapid switching cancels obsolete effects, and window deactivation, reduced motion, or a cold/hung tab cleanly release the temporary panels. Still never captures page screenshots, copies full-page textures through JavaScript, or waits for an animation to finish before selecting another tab. Elastic mode adds a small GPU-composited squish. Ripple adds a procedural WebGL light wave over the native page, **not pixel-level distortion of webpage content**. The shader reuses its program, geometry, and buffers, caps resolution, stops after 220 ms, and falls back to the transform if WebGL is unavailable or lost.
 
 Gecko retains up to five tab layer caches, warms tabs on pointer hover, and keeps its normal memory-pressure behavior. The native Wayland path and hardware acceleration remain enabled. There are no `--disable-gpu`, `--no-sandbox`, or permanent animation loops. Web content and videos retain their own native compositor and accessibility tree.
 
@@ -83,6 +83,15 @@ python3 -m venv .venv
 .venv/bin/python tests/native_smoke.py
 .venv/bin/python tests/native_keys.py
 ```
+
+To test native KDE Wayland keyboard delivery instead of XTEST, with `kdotool` installed and writable `/dev/uinput`:
+
+```sh
+.venv/bin/python -m pip install -r tests/requirements-wayland.txt
+STILL_TEST_WAYLAND=1 .venv/bin/python tests/native_keys.py
+```
+
+The Wayland test creates a temporary virtual keyboard, verifies window focus before sending shortcuts, and tests arrows with a webpage input focused and page key handling enabled.
 
 Tests create their own profiles and local HTTP fixtures. They cover start-page and native address-bar submission, rendering after navigation, requested URLs in new windows, migration fallback ownership, real native tabs, page/chrome separation, transition/shader lifecycle, rapid cancellation, overflow and replacement, authentication popups, native downloads, migration, and session restore. The separate keyboard suite requires `xdotool` and an X11/XWayland display and checks real OS accelerators; WebDriver content key synthesis does not exercise browser shortcuts. Artifacts and measurements go into ignored `test-results/`. Only these test launches enable Marionette and remote system access; normal Still launches enable neither. Account passwords and Google authentication are never automated by the suite.
 

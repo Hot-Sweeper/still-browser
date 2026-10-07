@@ -7,6 +7,11 @@
       this.canvas = canvas;
       this.panel = panel;
       this.animation = null;
+      this.exitAnimation = null;
+      this.target = null;
+      this.outgoing = null;
+      this.pendingTab = null;
+      this.readyTimer = 0;
       this.frame = 0;
       this.gl = null;
       this.failed = false;
@@ -17,7 +22,15 @@
       if (this.frame) this.win.cancelAnimationFrame(this.frame);
       this.frame = 0;
       this.animation?.cancel();
+      this.exitAnimation?.cancel();
       this.animation = null;
+      this.exitAnimation = null;
+      this.target?.removeAttribute('still-entering');
+      this.outgoing?.removeAttribute('still-exiting');
+      this.panel.removeAttribute('still-transition');
+      this.target = this.outgoing = this.pendingTab = null;
+      this.win.clearTimeout(this.readyTimer);
+      this.readyTimer = 0;
       this.canvas.hidden = true;
     }
     initialize() {
@@ -57,20 +70,48 @@
         return true;
       } catch { this.failed = true; return false; }
     }
-    play(direction = 1) {
+    prepare(tab, previousTab, direction = 1) {
       this.cancel();
       const mode = this.win.Services.prefs.getStringPref('still.motion', 'elastic');
-      if (this.win.matchMedia('(prefers-reduced-motion: reduce)').matches || mode === 'off') return;
+      if (this.win.document.hidden || this.win.matchMedia('(prefers-reduced-motion: reduce)').matches || mode === 'off') return;
+      const target = this.win.gBrowser.tabContainer.getRelatedElement(tab);
+      if (!target || target.classList.contains('split-view-panel')) return;
+      const outgoing = previousTab && !previousTab.closing && previousTab.linkedBrowser?.hasLayers
+        ? this.win.gBrowser.tabContainer.getRelatedElement(previousTab) : null;
       const sign = Math.sign(direction) || 1;
-      const frames = mode === 'elastic' || mode === 'ripple'
-        ? [
-          { transform: `translateX(${sign * 24}px) scaleX(.983) scaleY(1.009)`, offset: 0 },
-          { transform: `translateX(${-sign * 3}px) scaleX(1.004) scaleY(.998)`, offset: .65 },
-          { transform: 'translateX(0) scale(1)', offset: 1 }
-        ]
-        : [{ transform: `translateX(${sign * 18}px)` }, { transform: 'translateX(0)' }];
-      this.animation = this.panel.animate(frames, { duration: mode === 'slide' ? 150 : 200, easing: 'cubic-bezier(.16,1,.3,1)' });
-      this.animation.onfinish = () => { this.animation = null; };
+      const paired = outgoing && outgoing !== target && !outgoing.classList.contains('split-view-panel');
+      this.target = target; this.pendingTab = tab; this.directionSign = sign; this.mode = mode;
+      this.panel.setAttribute('still-transition', '');
+      target.setAttribute('still-entering', '');
+      const distance = paired ? `${sign * 100}%` : `${sign * 112}px`;
+      const squash = mode === 'slide' ? '' : ' scaleX(.992) scaleY(1.004)';
+      const transformOrigin = sign > 0 ? 'left center' : 'right center';
+      const timing = { duration: mode === 'slide' ? 220 : 260, easing: 'cubic-bezier(.22,.75,.22,1)', fill: 'both' };
+      this.animation = target.animate([
+        { transform: `translateX(${distance})${squash}`, transformOrigin },
+        { transform: 'translateX(0) scale(1)', transformOrigin }
+      ], timing);
+      this.animation.pause();
+      if (paired) {
+        this.outgoing = outgoing;
+        outgoing.setAttribute('still-exiting', '');
+        this.exitAnimation = outgoing.animate([
+          { transform: 'translateX(0)' }, { transform: `translateX(${-sign * 100}%)` }
+        ], timing);
+        this.exitAnimation.pause();
+      }
+      const token = this.generation;
+      this.animation.onfinish = () => { if (token === this.generation) this.cancel(); };
+      // A hung/cold tab must never leave an overlay or paused animation behind.
+      this.readyTimer = this.win.setTimeout(() => { if (token === this.generation) this.cancel(); }, 700);
+    }
+    present(tab) {
+      if (tab !== this.pendingTab || this.animation?.playState !== 'paused' || this.panel.selectedPanel !== this.target) return;
+      const browser = tab.linkedBrowser;
+      if (!browser.hasLayers || browser.hasAttribute('blank') || browser.hasAttribute('pendingpaint')) return;
+      this.win.clearTimeout(this.readyTimer); this.readyTimer = 0;
+      this.animation.play(); this.exitAnimation?.play();
+      const mode = this.mode, direction = this.directionSign;
       if (mode !== 'ripple' || !this.initialize()) return;
       const scale = Math.min(this.win.devicePixelRatio || 1, 1.5);
       const width = Math.ceil(this.win.innerWidth * scale), height = Math.ceil(this.win.innerHeight * scale);

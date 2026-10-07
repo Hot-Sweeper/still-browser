@@ -68,7 +68,7 @@
   const effects = new window.StillEffects(window, canvas, gBrowser.tabpanels);
   const controller = {
     engine: 'Gecko', ready: false, slots: [], overflow: [], effects,
-    switching: false, reconciling: false, shuttingDown: false,
+    switching: false, reconciling: false, shuttingDown: false, suppressMotion: false,
     previousIndex: 0, dragIndex: -1, dockIndex: 0, dockOpen: false,
     popupCount: 0, hideTimer: 0, toastTimer: 0, reconcileTimer: 0,
     mutationTimer: 0, saveTimer: 0, animationsStarted: 0,
@@ -121,9 +121,10 @@
     select(index, animate = true) {
       const tab = this.slots[index];
       if (!tab || tab.closing) return;
-      const previous = this.selectedIndex;
-      if (gBrowser.selectedTab !== tab) gBrowser.selectedTab = tab;
-      else if (animate && previous !== index) effects.play(index - previous);
+      if (!animate) effects.cancel();
+      this.suppressMotion = !animate;
+      try { if (gBrowser.selectedTab !== tab) gBrowser.selectedTab = tab; }
+      finally { this.suppressMotion = false; }
       if (isEmpty(tab)) {
         if (actualUrl(tab) !== START) window.openTrustedLinkIn(START, 'current', { targetBrowser: tab.linkedBrowser });
         this.showChrome();
@@ -134,9 +135,10 @@
     },
     onSelect() {
       const index = this.selectedIndex;
-      if (index < 0) { this.showReplacement(); return; }
-      if (this.ready && index !== this.previousIndex) {
-        effects.play(index - this.previousIndex);
+      if (index < 0) { effects.cancel(); this.showReplacement(); return; }
+      if (this.ready && !this.suppressMotion && index !== this.previousIndex) {
+        effects.prepare(this.slots[index], this.slots[this.previousIndex], index - this.previousIndex);
+        window.queueMicrotask(() => effects.present(gBrowser.selectedTab));
         this.animationsStarted++;
       }
       this.previousIndex = index;
@@ -427,7 +429,11 @@
     }
   }, { capture: true });
   listen(window, 'keyup', event => { if (event.key === 'Control' || event.key === 'Meta') controller.commitDock(); }, { capture: true });
-  listen(window, 'blur', () => { controller.dockOpen = false; dock.hidden = true; effects.cancel(); });
+  // Remote content focus fires blur during a normal tab switch. Only actual
+  // window deactivation should stop motion and dismiss the quick-switch dock.
+  listen(window, 'deactivate', () => { controller.dockOpen = false; dock.hidden = true; effects.cancel(); });
+  listen(gBrowser.tabpanels, 'TabSwitched', event => effects.present(event.detail.tab));
+  listen(gBrowser.tabpanels, 'TabSwitchDone', () => effects.present(gBrowser.selectedTab));
   listen(gBrowser.tabContainer, 'TabOpen', () => controller.scheduleReconcile());
   listen(gBrowser.tabContainer, 'TabClose', () => controller.scheduleReconcile());
   listen(gBrowser.tabContainer, 'SSTabRestored', () => controller.scheduleReconcile());
