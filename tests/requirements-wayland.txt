@@ -1,0 +1,2 @@
+# Optional native KDE/Wayland keyboard tests; production has no Python packages.
+evdev==2.0.0

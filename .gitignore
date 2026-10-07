@@ -21,3 +21,10 @@ Thumbs.db
 .vscode/
 *.user
 *.suo
+
+# Native engine downloads, private profiles, and browser integration tests
+.cache/
+.venv/
+__pycache__/
+*.pyc
+test-results/

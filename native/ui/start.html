@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; object-src 'none'">
+  <title>Still</title>
+  <link rel="icon" href="assets/still-icon.png">
+  <link rel="stylesheet" href="start.css">
+</head>
+<body>
+  <main>
+    <div class="brand"><img src="assets/still-icon.png" alt=""><span>Still</span></div>
+    <form id="search-form" autocomplete="off">
+      <label class="search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.2 4.2"></path></svg>
+        <input id="search-input" autofocus autocomplete="off" spellcheck="false" aria-label="Search or enter an address" placeholder="Search or enter an address">
+      </label>
+    </form>
+    <p class="hint">Five slots. Room to breathe.</p>
+    <div class="shortcuts" aria-label="Keyboard shortcuts">
+      <span><kbd>Ctrl</kbd> + <kbd>1–5</kbd> switch slots</span>
+      <span><kbd>Ctrl</kbd> + <kbd>L</kbd> address &amp; history</span>
+      <span><kbd>Ctrl</kbd> + <kbd>Tab</kbd> quick switch</span>
+    </div>
+  </main>
+  <script src="model.js"></script>
+  <script src="start.js"></script>
+</body>
+</html>
