@@ -40,6 +40,7 @@ The installer switches the Still launchers to `~/.local/opt/still-browser/native
 | Action | Shortcut |
 | --- | --- |
 | Switch slots | Ctrl+1 through Ctrl+5 |
+| Previous / next slot | Ctrl+Left / Ctrl+Right |
 | Address and native suggestions | Ctrl+L |
 | Next empty slot | Ctrl+T |
 | Clear current slot | Ctrl+W |

@@ -325,6 +325,8 @@
   shortcut('dock-reverse', 'VK_TAB', 'accel,shift', () => controller.openDock(true), true);
   shortcut('previous', 'VK_UP', 'alt', () => controller.select(M.boundedStep(controller.selectedIndex,-1)), true);
   shortcut('next', 'VK_DOWN', 'alt', () => controller.select(M.boundedStep(controller.selectedIndex,1)), true);
+  shortcut('previous-horizontal', 'VK_LEFT', 'accel', () => controller.select(M.boundedStep(controller.selectedIndex,-1)), true);
+  shortcut('next-horizontal', 'VK_RIGHT', 'accel', () => controller.select(M.boundedStep(controller.selectedIndex,1)), true);
   root.append(commands, keys);
   for (let index = 0; index < M.SLOT_COUNT; index++) {
     const button = html('button', { class: 'still-slot', role: 'tab', type: 'button', draggable: 'true' });
@@ -411,6 +413,9 @@
     if (accel && key === 'tab') { consume(); controller.openDock(event.shiftKey); return; }
     if (accel && key === 'j' && !event.shiftKey) { consume(); window.BrowserCommands.downloadsUI(); return; }
     if (accel && (key === 'l' || key === 'k')) controller.showChrome();
+    if (accel && !event.altKey && !event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      consume(); controller.select(M.boundedStep(controller.selectedIndex, event.key === 'ArrowLeft' ? -1 : 1)); return;
+    }
     if (event.altKey && !accel && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
       consume(); controller.select(M.boundedStep(controller.selectedIndex, event.key === 'ArrowUp' ? -1 : 1)); return;
     }
