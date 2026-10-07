@@ -1,8 +1,7 @@
 {
   "name": "still-browser",
-  "version": "0.1.4",
-  "description": "Still — a calm Chromium browser with five fixed browsing slots.",
-  "main": "src/main.js",
+  "version": "0.2.0-native.1",
+  "description": "Still \u2014 a calm native Gecko browser with five fixed slots and fluid GPU transitions.",
   "author": "Tim <131392600+Hot-Sweeper@users.noreply.github.com>",
   "license": "MIT",
   "homepage": "https://github.com/Hot-Sweeper/still-browser#readme",
@@ -15,82 +14,14 @@
   },
   "desktopName": "com.tim.still.desktop",
   "scripts": {
-    "postinstall": "node scripts/fetch-yt-dlp.js",
-    "start": "electron .",
-    "build:mouse-helper": "dotnet publish native/mouse-navigation-helper/MouseNavigationHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -p:DebugType=None -p:DebugSymbols=false -o build/mouse-helper",
-    "check": "node --check src/main.js && node --check src/renderer.js && node --check src/preload.js && node --check src/start.js && node --check src/start-preload.js && node --check src/import-opera-cookies.js && node --check src/import-opera-extensions.js && node --check src/import-opera-history.js && node --check src/download-manager.js && node --check src/youtube-downloader.js && node --check src/youtube-ui.js && node --check src/migrate-opera.js && node --check src/repair-google-session.js && node --check src/default-browser.js && node --check scripts/fetch-yt-dlp.js && node --check scripts/package-app.js",
-    "pack": "node scripts/package-app.js pack",
-    "dist": "node scripts/package-app.js",
-    "dist:win": "node scripts/package-app.js win32",
-    "dist:linux": "node scripts/package-app.js linux",
-    "dist:mac": "node scripts/package-app.js darwin"
-  },
-  "devDependencies": {
-    "electron": "43.4.0",
-    "electron-builder": "26.15.3"
-  },
-  "build": {
-    "appId": "com.tim.still.v2",
-    "productName": "Still",
-    "asar": true,
-    "protocols": [
-      {
-        "name": "Web links",
-        "schemes": [
-          "http",
-          "https"
-        ]
-      }
-    ],
-    "files": [
-      "src/**/*",
-      "build/icon.png",
-      "build/icon.ico",
-      "package.json"
-    ],
-    "win": {
-      "icon": "build/icon.ico",
-      "target": "portable",
-      "artifactName": "Still-${version}-${arch}.${ext}",
-      "extraResources": [
-        {
-          "from": "build/mouse-helper/mouse-navigation-helper.exe",
-          "to": "mouse-navigation-helper.exe"
-        },
-        {
-          "from": "build/vendor/yt-dlp.exe",
-          "to": "yt-dlp.exe"
-        }
-      ]
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Network",
-      "executableName": "still",
-      "synopsis": "A calm Chromium browser with five fixed browsing slots",
-      "artifactName": "Still-${version}-${arch}.${ext}",
-      "syncDesktopName": true,
-      "extraResources": [
-        {
-          "from": "build/vendor/yt-dlp",
-          "to": "yt-dlp"
-        }
-      ]
-    },
-    "mac": {
-      "icon": "build/icon.png",
-      "category": "public.app-category.productivity",
-      "artifactName": "Still-${version}-${arch}.${ext}",
-      "extraResources": [
-        {
-          "from": "build/vendor/yt-dlp",
-          "to": "yt-dlp"
-        }
-      ]
-    }
+    "start": "python3 scripts/run_native.py",
+    "check": "node --check native/ui/browser.js && node --check native/ui/effects.js && node --check native/ui/model.js && node --check native/ui/start.js && node --check native/ui/downloader.js && node --check scripts/fetch-yt-dlp.js && python3 -m compileall -q native/launcher.py scripts tests",
+    "test": "node --test tests/model.test.cjs && python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "test:native": "python3 tests/native_smoke.py",
+    "pack": "python3 scripts/build_native.py",
+    "dist": "python3 scripts/build_native.py --archive",
+    "dist:linux": "python3 scripts/build_native.py --archive",
+    "install:native": "python3 scripts/install_native.py",
+    "update:engine": "python3 scripts/build_native.py --update-engine"
   }
 }

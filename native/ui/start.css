@@ -146,3 +146,7 @@ input::placeholder { color: var(--muted); }
 .suggestion small { margin-top: 3px; color: var(--muted); font: 11px/1.25 Inter, "Segoe UI Variable", "Segoe UI", sans-serif; }
 .suggestion.selected, .suggestion:hover { background: var(--hover); }
 .suggestion.search-option { border-top: 1px solid var(--border); border-radius: 0 0 11px 11px; }
+.hint { margin:25px 0 20px; text-align:center; font-size:13px; letter-spacing:.01em; color:var(--muted); }
+.shortcuts { display:flex; justify-content:center; flex-wrap:wrap; gap:16px; font-size:11px; color:var(--muted); }
+kbd { display:inline-block; padding:3px 5px; border:1px solid var(--border); border-radius:5px; font:10px Inter,system-ui,sans-serif; background:var(--field); }
+@media (prefers-reduced-motion:reduce) { .search-box {transition:none;} }

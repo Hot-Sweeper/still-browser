@@ -1,0 +1,9 @@
+{
+  "engine": "Firefox/Gecko",
+  "version": "157.0.1",
+  "channel": "release",
+  "platform": "linux-x86_64",
+  "locale": "en-US",
+  "upstream": "https://www.mozilla.org/firefox/",
+  "source": "https://archive.mozilla.org/pub/firefox/releases/157.0.1/source/"
+}
