@@ -15,6 +15,8 @@
       this.gl = null;
       this.failed = false;
       this.generation = 0;
+      this.panels = [];
+      this.stretch = null;
     }
     cancel() {
       this.generation++;
@@ -22,10 +24,19 @@
       this.frame = 0;
       this.animation?.cancel();
       this.animation = null;
+      this.stretch?.cancel(); this.stretch = null;
+      for (const panel of this.panels) {
+        panel.removeAttribute('still-strip-panel');
+        panel.style.removeProperty('--still-strip-index');
+      }
+      this.panels = [];
+      this.panel.parentElement.removeAttribute('still-strip-viewport');
       this.target?.removeAttribute('still-entering');
       this.outgoing?.removeAttribute('still-exiting');
       this.panel.removeAttribute('still-transition');
       this.target = this.outgoing = this.pendingTab = null;
+      this.edge = 0; this.queuedEdge = 0;
+      this.required = [];
       this.win.clearTimeout(this.readyTimer);
       this.readyTimer = 0;
       this.canvas.hidden = true;
@@ -67,10 +78,31 @@
         return true;
       } catch { this.failed = true; return false; }
     }
-    prepare(tab, previousTab, direction = 1) {
+    position(fallback) {
+      if (!this.animation) return fallback;
+      const width = this.panel.getBoundingClientRect().width;
+      return width ? -new this.win.DOMMatrixReadOnly(this.win.getComputedStyle(this.panel).transform).m41 / width : fallback;
+    }
+    stage(slots) {
+      this.slots = slots.slice();
+      this.panel.parentElement.setAttribute('still-strip-viewport', '');
+      this.panel.setAttribute('still-transition', '');
+      this.panels = slots.map((tab, index) => {
+        const panel = this.win.gBrowser.tabContainer.getRelatedElement(tab);
+        panel.style.setProperty('--still-strip-index', index);
+        panel.setAttribute('still-strip-panel', '');
+        return panel;
+      });
+    }
+    enabled() {
+      return !this.win.document.hidden && !this.win.matchMedia('(prefers-reduced-motion: reduce)').matches &&
+        this.win.Services.prefs.getStringPref('still.motion', 'elastic') !== 'off';
+    }
+    prepare(tab, previousTab, direction = 1, slots) {
+      const from = this.position(slots.indexOf(previousTab));
       this.cancel();
       const mode = this.win.Services.prefs.getStringPref('still.motion', 'elastic');
-      if (this.win.document.hidden || this.win.matchMedia('(prefers-reduced-motion: reduce)').matches || mode === 'off') return;
+      if (!this.enabled() || slots.indexOf(previousTab) < 0) return;
       const target = this.win.gBrowser.tabContainer.getRelatedElement(tab);
       if (!target || target.classList.contains('split-view-panel')) return;
       const outgoing = previousTab && !previousTab.closing && previousTab.linkedBrowser?.hasLayers
@@ -82,36 +114,99 @@
       // a blank strip underneath an incoming transform.
       if (!paired) return;
       this.target = target; this.pendingTab = tab; this.directionSign = sign; this.mode = mode;
-      this.panel.setAttribute('still-transition', '');
-      target.setAttribute('still-entering', '');
-      const distance = `${sign * 100}%`;
-      const squash = mode === 'slide' ? '' : ' scaleX(.992) scaleY(1.004)';
-      const transformOrigin = sign > 0 ? 'left center' : 'right center';
+      const to = slots.indexOf(tab);
+      this.stage(slots);
+      this.required = slots.slice(Math.max(0, Math.floor(Math.min(from, to))), Math.min(slots.length, Math.ceil(Math.max(from, to)) + 1));
+      for (const item of this.required) if (item !== tab) this.win.gBrowser.warmupTab(item);
       const speed = this.win.Services.prefs.getStringPref('still.motion.speed', 'smooth');
       const duration = ({ fast: 240, normal: 400, smooth: 560 })[speed] || 560;
       const timing = { duration, easing: 'cubic-bezier(.32,0,.2,1)', fill: 'both' };
-      this.animation = target.animate([
-        { transform: `translateX(${distance})${squash}`, transformOrigin },
-        { transform: 'translateX(0) scale(1)', transformOrigin }
-      ], timing);
+      let keys = [
+        { transform: `translateX(${-from * 100}%)` },
+        { transform: `translateX(${-to * 100}%)` }
+      ];
+      // Retargeting an end pull keeps its expanded edge until the camera is
+      // back inside the row, so interruption cannot expose an empty gutter.
+      if (from < 0 || from > slots.length - 1) {
+        const boundary = from < 0 ? 0 : slots.length - 1;
+        const stretch = []; keys = [];
+        for (let step = 0; step <= 60; step++) {
+          const t = step / 60;
+          let lo = 0, hi = 1;
+          for (let n = 0; n < 16; n++) {
+            const u = (lo + hi) / 2;
+            const x = 3 * (1-u)**2 * u * .32 + 3 * (1-u) * u**2 * .2 + u**3;
+            if (x < t) lo = u; else hi = u;
+          }
+          const u = (lo + hi) / 2;
+          const progress = step === 0 ? 0 : step === 60 ? 1 : 3 * (1-u) * u**2 + u**3;
+          const position = from + (to - from) * progress;
+          const expansion = boundary === 0 ? Math.max(0, -position) : Math.max(0, position - boundary);
+          keys.push({ offset: t, transform: `translateX(${-position * 100}%)` });
+          stretch.push({ offset: t, transform: `translateX(${boundary * 100}%) scaleX(${1 + expansion})`, transformOrigin: boundary === 0 ? 'right center' : 'left center' });
+        }
+        timing.easing = 'linear';
+        this.stretch = this.panels[boundary].animate(stretch, timing);
+        this.stretch.pause();
+      }
+      this.animation = this.panel.animate(keys, timing);
       this.animation.pause();
       if (paired) {
         this.outgoing = outgoing;
-        outgoing.setAttribute('still-exiting', '');
-        // Keep the full cached surface underneath until the incoming page
-        // covers it. Fractional scaling and cold paints cannot open a seam.
       }
       const token = this.generation;
-      this.animation.onfinish = () => { if (token === this.generation) this.cancel(); };
+      this.animation.onfinish = () => {
+        if (token !== this.generation) return;
+        const edge = this.queuedEdge;
+        this.cancel();
+        if (edge) this.bump(edge, slots, to);
+      };
       // A hung/cold tab must never leave an overlay or paused animation behind.
       this.readyTimer = this.win.setTimeout(() => { if (token === this.generation) this.cancel(); }, 700);
+      const poll = () => {
+        if (token !== this.generation || this.animation?.playState !== 'paused') return;
+        this.present(tab);
+        if (this.animation?.playState === 'paused') this.frame = this.win.requestAnimationFrame(poll);
+      };
+      this.frame = this.win.requestAnimationFrame(poll);
+    }
+    bump(direction, slots, index) {
+      if (!this.enabled() || this.edge === direction) return;
+      if (this.animation && !this.edge) { this.queuedEdge = direction; return; }
+      if (!slots[index]?.linkedBrowser.hasLayers) return;
+      this.cancel(); this.edge = direction;
+      this.stage(slots);
+      this.target = this.panels[index];
+      const width = this.panel.getBoundingClientRect().width;
+      const pull = Math.min(96, width * .065);
+      const adjacent = slots[index - direction];
+      const canRebound = adjacent?.linkedBrowser.hasLayers && !adjacent.linkedBrowser.hasAttribute('blank');
+      if (adjacent) this.win.gBrowser.warmupTab(adjacent);
+      const keys = [], stretch = [];
+      // A damped impulse: restrained pull, a small rebound, then rest.
+      for (let step = 0; step <= 60; step++) {
+        const t = step / 60;
+        const impulse = Math.exp(-5.5 * t) * Math.sin(t * 10) / .46;
+        const displacement = step === 60 ? 0 : -direction * pull * (canRebound ? impulse : Math.max(0, impulse));
+        keys.push({ offset: t, transform: `translateX(calc(${-index * 100}% + ${displacement}px))` });
+        stretch.push({ offset: t, transform: `translateX(${index * 100}%) scaleX(${1 + Math.max(0, -direction * displacement) / width})`, transformOrigin: direction < 0 ? 'right center' : 'left center' });
+      }
+      const timing = { duration: 680, fill: 'both', easing: 'linear' };
+      this.animation = this.panel.animate(keys, timing);
+      this.stretch = this.target.animate(stretch, timing);
+      const token = this.generation;
+      this.animation.onfinish = () => { if (token === this.generation) this.cancel(); };
     }
     present(tab) {
       if (tab !== this.pendingTab || this.animation?.playState !== 'paused' || this.panel.selectedPanel !== this.target) return;
       const browser = tab.linkedBrowser;
       if (!browser.hasLayers || browser.hasAttribute('blank') || browser.hasAttribute('pendingpaint')) return;
+      if (this.required.some(item => !item.linkedBrowser.hasLayers || item.linkedBrowser.hasAttribute('blank') || item.linkedBrowser.hasAttribute('pendingpaint'))) return;
       this.win.clearTimeout(this.readyTimer); this.readyTimer = 0;
+      if (this.frame) this.win.cancelAnimationFrame(this.frame);
+      this.frame = 0;
       this.animation.play();
+      this.stretch?.play();
       const mode = this.mode, direction = this.directionSign;
       if (mode !== 'ripple' || !this.initialize()) return;
       const scale = Math.min(this.win.devicePixelRatio || 1, 1.5);

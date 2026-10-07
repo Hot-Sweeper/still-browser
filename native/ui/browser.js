@@ -133,11 +133,17 @@
       this.scheduleHide();
       this.render();
     },
+    step(direction) {
+      const index = this.selectedIndex;
+      const next = M.boundedStep(index, direction);
+      if (next === index) effects.bump(direction, this.slots, index);
+      else this.select(next);
+    },
     onSelect(previousTab = this.slots[this.previousIndex]) {
       const index = this.selectedIndex;
       if (index < 0) { effects.cancel(); this.showReplacement(); return; }
       if (this.ready && !this.suppressMotion && index !== this.previousIndex) {
-        effects.prepare(this.slots[index], previousTab, index - this.previousIndex);
+        effects.prepare(this.slots[index], previousTab, index - this.previousIndex, this.slots);
         window.queueMicrotask(() => effects.present(gBrowser.selectedTab));
         this.animationsStarted++;
       }
@@ -148,6 +154,7 @@
       const tab = this.slots[index];
       if (!tab) return;
       if (!tab.linkedBrowser.permitUnload().permitUnload) return;
+      effects.cancel();
       // Close the old tab, rather than navigating it: native unload prompts,
       // session history, media cleanup, and Undo Close Tab remain intact.
       this.reconciling = true;
@@ -166,6 +173,7 @@
     },
     reorder(from, to) {
       if (from < 0 || to < 0 || from === to) return;
+      effects.cancel();
       [this.slots[from], this.slots[to]] = [this.slots[to], this.slots[from]];
       this.tagSlots();
       this.slots.forEach((tab, i) => gBrowser.moveTabTo(tab, { tabIndex: i }));
@@ -174,6 +182,7 @@
     },
     reconcile() {
       if (this.reconciling || this.shuttingDown) return;
+      effects.cancel();
       this.reconciling = true;
       try {
         const tabs = Array.from(gBrowser.tabs).filter(tab => !tab.closing);
@@ -213,6 +222,7 @@
         button.addEventListener('click', () => {
           if (!gBrowser.tabs.includes(incoming)) { replacement.hidden = true; this.reconcile(); return; }
           if (!tab.linkedBrowser.permitUnload().permitUnload) return;
+          effects.cancel();
           this.reconciling = true;
           SessionStore.deleteCustomTabValue(tab, SLOT_KEY);
           this.slots[i] = incoming; tabSet(incoming, i);
@@ -330,10 +340,10 @@
   shortcut('downloads', 'j', 'accel', () => window.BrowserCommands.downloadsUI());
   shortcut('dock', 'VK_TAB', 'accel', () => controller.openDock(false), true);
   shortcut('dock-reverse', 'VK_TAB', 'accel,shift', () => controller.openDock(true), true);
-  shortcut('previous', 'VK_UP', 'alt', () => controller.select(M.boundedStep(controller.selectedIndex,-1)), true);
-  shortcut('next', 'VK_DOWN', 'alt', () => controller.select(M.boundedStep(controller.selectedIndex,1)), true);
-  shortcut('previous-horizontal', 'VK_LEFT', 'accel', () => controller.select(M.boundedStep(controller.selectedIndex,-1)), true);
-  shortcut('next-horizontal', 'VK_RIGHT', 'accel', () => controller.select(M.boundedStep(controller.selectedIndex,1)), true);
+  shortcut('previous', 'VK_UP', 'alt', () => controller.step(-1), true);
+  shortcut('next', 'VK_DOWN', 'alt', () => controller.step(1), true);
+  shortcut('previous-horizontal', 'VK_LEFT', 'accel', () => controller.step(-1), true);
+  shortcut('next-horizontal', 'VK_RIGHT', 'accel', () => controller.step(1), true);
   root.append(commands, keys);
   for (let index = 0; index < M.SLOT_COUNT; index++) {
     const button = html('button', { class: 'still-slot', role: 'tab', type: 'button', draggable: 'true' });
@@ -422,10 +432,10 @@
     if (accel && key === 'j' && !event.shiftKey) { consume(); window.BrowserCommands.downloadsUI(); return; }
     if (accel && (key === 'l' || key === 'k')) controller.showChrome();
     if (accel && !event.altKey && !event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-      consume(); controller.select(M.boundedStep(controller.selectedIndex, event.key === 'ArrowLeft' ? -1 : 1)); return;
+      consume(); controller.step(event.key === 'ArrowLeft' ? -1 : 1); return;
     }
     if (event.altKey && !accel && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
-      consume(); controller.select(M.boundedStep(controller.selectedIndex, event.key === 'ArrowUp' ? -1 : 1)); return;
+      consume(); controller.step(event.key === 'ArrowUp' ? -1 : 1); return;
     }
     if (event.key === 'Escape') {
       if (!replacement.hidden) { consume(); controller.cancelReplacement(); }

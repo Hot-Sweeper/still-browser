@@ -180,12 +180,42 @@ def main():
           const started=performance.now();let runningFrames=0;const shifts=[];
           function sample(){
             if(effect.animation?.playState==='running')runningFrames++;
-            if(effect.target)shifts.push(new DOMMatrixReadOnly(getComputedStyle(effect.target).transform).m41);
+            if(effect.target)shifts.push(new DOMMatrixReadOnly(getComputedStyle(effect.panel).transform).m41);
             if(performance.now()-started<650)requestAnimationFrame(sample);
-            else done({runningFrames,shifts,clean:!effect.animation&&!document.querySelector('[still-entering],[still-exiting],[still-transition]')});
+            else done({runningFrames,shifts,clean:!effect.animation&&!document.querySelector('[still-strip-panel],[still-strip-viewport],[still-transition]')});
           }requestAnimationFrame(sample);''')
         check('native content focus leaves a visible, multi-frame transition running', motion['runningFrames'] >= 4 and len(motion['shifts']) >= 4 and max(motion['shifts']) - min(motion['shifts']) > 30)
-        check('completed slide releases both native panels and all transition attributes', motion['clean'])
+        check('completed slide releases the native strip and all transition attributes', motion['clean'])
+        m.execute_script('StillBrowser.select(2);')
+        wait(m, 'return StillBrowser.effects.animation?.playState==="running";')
+        continuity = m.execute_script('''const effect=StillBrowser.effects;
+          effect.animation.pause();effect.animation.currentTime=180;
+          const before=new DOMMatrixReadOnly(getComputedStyle(effect.panel).transform).m41;
+          const a=effect.panels[1].getBoundingClientRect(),b=effect.panels[2].getBoundingClientRect();
+          StillBrowser.select(3);
+          const after=new DOMMatrixReadOnly(getComputedStyle(effect.panel).transform).m41;
+          return {jump:Math.abs(after-before),seam:Math.abs(a.right-b.left),staged:effect.panels.length};''')
+        check('five-page strip joins adjacent pages and retargets without jumping', continuity['jump'] < 1 and continuity['seam'] < 1 and continuity['staged'] == 5)
+        for index, direction in [(0, -1), (4, 1)]:
+            m.execute_script('StillBrowser.select(arguments[0],false);', [index])
+            wait(m, 'return gBrowser.selectedBrowser.hasLayers;')
+            edge = m.execute_script('''StillBrowser.step(arguments[0]);const e=StillBrowser.effects;
+              e.animation.pause();e.stretch.pause();e.animation.currentTime=e.stretch.currentTime=90;
+              const viewport=e.panel.parentElement.getBoundingClientRect(),page=e.target.getBoundingClientRect();
+              const before=e.animation;StillBrowser.step(arguments[0]);
+              return {index:StillBrowser.selectedIndex,pull:new DOMMatrixReadOnly(getComputedStyle(e.panel).transform).m41+StillBrowser.selectedIndex*e.panel.getBoundingClientRect().width,
+                covered:page.left<=viewport.left+1&&page.right>=viewport.right-1,same:before===e.animation};''', [direction])
+            check(f'boundary {index+1} resists repeat input, expands the page, and keeps selection bounded', edge['index'] == index and edge['pull'] * direction < -10 and edge['covered'] and edge['same'])
+            interruption = m.execute_script('''const e=StillBrowser.effects;
+              const before=new DOMMatrixReadOnly(getComputedStyle(e.panel).transform).m41;
+              StillBrowser.step(-arguments[0]);
+              const after=new DOMMatrixReadOnly(getComputedStyle(e.panel).transform).m41;
+              const page=e.panels[arguments[1]].getBoundingClientRect(),viewport=e.panel.parentElement.getBoundingClientRect();
+              return {jump:Math.abs(before-after),covered:page.left<=viewport.left+1&&page.right>=viewport.right-1,index:StillBrowser.selectedIndex};''', [direction, index])
+            check(f'interrupting boundary {index+1} continues from its pull without an empty edge', interruption['jump'] < 1 and interruption['covered'] and interruption['index'] == index - direction)
+            wait(m, 'return !StillBrowser.effects.animation && !document.querySelector("[still-strip-panel],[still-strip-viewport],[still-transition]");')
+        m.execute_script('StillBrowser.setMotion("off");StillBrowser.select(4,false);StillBrowser.step(1);')
+        check('instant mode suppresses end bounce', m.execute_script('return !StillBrowser.effects.animation;'))
         for mode in ['slide', 'elastic', 'ripple', 'off']:
             m.execute_script('window.StillBrowser.setMotion(arguments[0]);', [mode])
             if mode == 'ripple':
@@ -195,7 +225,7 @@ def main():
             report['performance'][mode] = result
             print('FRAMES', mode, json.dumps(result), flush=True)
             time.sleep(.65)
-            check(f'{mode} settles without an idle shader loop', m.execute_script('return window.StillBrowser.effects.frame===0 && document.getElementById("still-effects").hidden && gBrowser.tabpanels.getAnimations({subtree:true}).length===0 && !document.querySelector("[still-entering],[still-exiting],[still-transition]");'))
+            check(f'{mode} settles without an idle shader loop', m.execute_script('return window.StillBrowser.effects.frame===0 && document.getElementById("still-effects").hidden && gBrowser.tabpanels.getAnimations({subtree:true}).length===0 && !document.querySelector("[still-strip-panel],[still-strip-viewport],[still-transition]");'))
         gpu = m.execute_script('return Boolean(window.StillBrowser.effects.gl) && !window.StillBrowser.effects.failed;')
         report['gpuShader'] = gpu
         check('ripple has a GPU shader or a clean compositor fallback', gpu or m.execute_script('return window.StillBrowser.effects.failed && window.StillBrowser.effects.frame===0;'))
@@ -204,7 +234,7 @@ def main():
         m.execute_script('window.StillBrowser.setMotion("elastic"); for(let i=0;i<150;i++) window.StillBrowser.select(i%5);')
         check('rapid switching commits the newest selection', m.execute_script('return window.StillBrowser.selectedIndex===4 && gBrowser.tabpanels.getAnimations({subtree:true}).length<=1;'))
         time.sleep(.65)
-        check('rapid switching leaves no animations behind', m.execute_script('return gBrowser.tabpanels.getAnimations({subtree:true}).length===0 && !document.querySelector("[still-entering],[still-exiting],[still-transition]");'))
+        check('rapid switching leaves no animations behind', m.execute_script('return gBrowser.tabpanels.getAnimations({subtree:true}).length===0 && !document.querySelector("[still-strip-panel],[still-strip-viewport],[still-transition]");'))
         m.execute_script('window.openWebLinkIn(arguments[0],"tab");', [origin + '/Incoming'])
         wait(m, 'return !document.getElementById("still-replace").hidden;')
         check('full slots prompt without losing any original page', m.execute_script('return window.StillBrowser.slots.length===5 && window.StillBrowser.overflow.length===1 && gBrowser.tabs.length===6;'))

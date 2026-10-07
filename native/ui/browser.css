@@ -99,15 +99,17 @@
 .still-control:hover { background:var(--still-field); }
 .still-control[data-action="close"]:hover { background:#bb4141; color:white; }
 #still-effects { position:fixed; inset:0; width:100%; height:100%; z-index:20; pointer-events:none; }
-:root[still-native] #tabbrowser-tabpanels[still-transition] { overflow:hidden; }
-:root[still-native] #tabbrowser-tabpanels > [still-entering] { z-index:2; will-change:transform; }
-:root[still-native] #tabbrowser-tabpanels > [still-exiting] {
-  /* Gecko hides inactive panels separately from CSS visibility. Retain only
-     the outgoing cached surface while its compositor animation runs. */
+:root[still-native] #tabbrowser-tabbox[still-strip-viewport] { overflow:clip; }
+:root[still-native] #tabbrowser-tabpanels[still-transition] { overflow:visible !important; will-change:transform; }
+:root[still-native] #tabbrowser-tabpanels > [still-strip-panel] {
+  /* Place native cached surfaces in one row. The stationary parent clips the
+     moving strip; inactive page scripts remain under Gecko's control. */
   -moz-subtree-hidden-only-visually:0;
   visibility:visible !important; display:flex !important;
-  z-index:1; pointer-events:none !important; will-change:transform;
+  transform:translateX(calc(var(--still-strip-index) * 100%));
+  z-index:0 !important; pointer-events:none !important;
 }
+:root[still-native] #tabbrowser-tabpanels > [still-strip-panel].deck-selected { pointer-events:auto !important; }
 #still-effects[hidden], #still-menu[hidden], #still-replace[hidden], #still-toast[hidden], #still-dock[hidden] { display:none !important; }
 #still-menu { position:fixed; right:12px; top:103px; width:280px; max-height:calc(100vh - 115px); overflow-y:auto; padding:9px; z-index:120; background:var(--still-glass); color:var(--still-text); border:1px solid var(--still-line); border-radius:16px; box-shadow:0 14px 42px rgba(0,0,0,.22); font:13px Inter,system-ui,sans-serif; }
 #still-menu button { display:block; width:100%; padding:10px; text-align:left; border:0; border-radius:8px; color:inherit; background:transparent; cursor:pointer; font:inherit; }
