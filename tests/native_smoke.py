@@ -15,6 +15,7 @@ import threading
 import time
 
 from marionette_driver.marionette import Marionette
+from marionette_driver.keys import Keys
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / 'test-results'
@@ -140,6 +141,26 @@ def main():
         check('legacy history and bookmarks import into native Places', imported == [True, True])
         m.execute_script('window.StillBrowser.showChrome();')
         (RESULTS / 'native-start.png').write_bytes(m.screenshot(format='binary'))
+        m.set_context('content')
+        m.find_element('css selector', 'input').send_keys(origin + '/SearchSubmission', Keys.RETURN)
+        m.set_context('chrome')
+        wait(m, 'return !gBrowser.selectedTab.hasAttribute("busy") && gBrowser.selectedBrowser.currentURI.spec.endsWith("/SearchSubmission") && gBrowser.selectedBrowser.hasLayers && gBrowser.selectedBrowser.docShellIsActive;')
+        m.set_context('content')
+        check('start-page Enter submits and renders the destination', m.find_element('css selector', 'h1').text == 'SearchSubmission')
+        m.set_context('chrome')
+        m.execute_script('StillBrowser.showChrome();gURLBar.value=arguments[0];gURLBar.handleCommand();', [origin + '/AddressSubmission'])
+        wait(m, 'return !gBrowser.selectedTab.hasAttribute("busy") && gBrowser.selectedBrowser.currentURI.spec.endsWith("/AddressSubmission") && gBrowser.selectedBrowser.hasLayers && gBrowser.selectedBrowser.docShellIsActive;')
+        m.set_context('content')
+        check('native address-bar submission renders the destination', m.find_element('css selector', 'h1').text == 'AddressSubmission')
+        m.set_context('chrome')
+        m.execute_async_script('StillBrowser.saveState().then(arguments[arguments.length-1]);')
+        saved_before_window = (profile / 'still-slots.json').read_text()
+        m.execute_script('Services.prefs.setBoolPref("browser.tabs.warnOnClose",false);openWebLinkIn(arguments[0],"window");', [origin + '/NewWindow'])
+        wait(m, 'return Array.from(Services.wm.getEnumerator("navigator:browser")).some(w=>w!==window && w.StillBrowser?.ready && w.gBrowser.selectedBrowser.currentURI.spec.endsWith("/NewWindow") && !w.gBrowser.selectedTab.hasAttribute("busy"));')
+        m.execute_async_script('const other=Array.from(Services.wm.getEnumerator("navigator:browser")).find(w=>w!==window && w.StillBrowser?.ready);other.StillBrowser.saveState().then(arguments[arguments.length-1]);')
+        check('new windows retain their requested page and preserve the migration fallback', saved_before_window == (profile / 'still-slots.json').read_text())
+        m.execute_script('for(const w of Services.wm.getEnumerator("navigator:browser")){if(w!==window)w.close();}Services.prefs.clearUserPref("browser.tabs.warnOnClose");')
+        wait(m, 'return Array.from(Services.wm.getEnumerator("navigator:browser")).length===1;')
         for i in range(5):
             m.execute_script('window.openWebLinkIn(arguments[0],"current",{targetBrowser:window.StillBrowser.slots[arguments[1]].linkedBrowser,inBackground:true});', [f'{origin}/Page-{i+1}', i])
         wait(m, 'return window.StillBrowser.slots.every(t=>!t.hasAttribute("busy") && t.linkedBrowser.currentURI.spec.includes("/Page-"));')

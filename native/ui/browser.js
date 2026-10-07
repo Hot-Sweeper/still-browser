@@ -264,7 +264,12 @@
       this.saveTimer = setTimeout(() => this.saveState(), 500);
     },
     async saveState() {
-      if (isPrivate) return;
+      if (isPrivate || !this.ready) return;
+      // SessionStore saves every window. The migration fallback belongs to the
+      // first normal Still window; opening a second window must not replace it.
+      const owner = Array.from(Services.wm.getEnumerator('navigator:browser'))
+        .find(win => !win.closed && win.StillBrowser?.ready && !win.StillBrowser.popup && !PrivateBrowsingUtils.isWindowPrivate(win));
+      if (owner !== window) return;
       const state = { version: 2, selected: Math.max(0, this.selectedIndex), slots: this.slots.map(tab => ({ url: isEmpty(tab) ? '' : actualUrl(tab), title: tab.label || '' })) };
       try { await IOUtils.writeJSON(PathUtils.join(PathUtils.profileDir, 'still-slots.json'), state, { tmpPath: PathUtils.join(PathUtils.profileDir, 'still-slots.json.tmp') }); }
       catch (error) { Cu.reportError('Still session save: ' + error); }
@@ -437,7 +442,15 @@
   let saved;
   try { saved = await IOUtils.readJSON(PathUtils.join(PathUtils.profileDir, 'still-slots.json')); } catch {}
   const onlyEmptyTabs = Array.from(gBrowser.tabs).every(isEmpty);
-  if (saved?.slots && onlyEmptyTabs && !isPrivate) {
+  // A native window can still show about:blank while its requested URL is
+  // starting. Never navigate over that pending command-line/link destination.
+  const startupURI = await window.gBrowserInit.uriToLoadPromise;
+  const hasRequestedPage = startupURI && startupURI !== START &&
+    !['about:blank', 'about:newtab', 'about:home'].includes(startupURI);
+  const otherNormalWindow = Array.from(Services.wm.getEnumerator('navigator:browser'))
+    .some(win => win !== window && !win.closed && win.StillBrowser && !win.StillBrowser.popup);
+  const restoreFallback = saved?.slots && onlyEmptyTabs && !isPrivate && !otherNormalWindow && !hasRequestedPage;
+  if (restoreFallback) {
     controller.reconciling = true;
     const first = gBrowser.selectedTab;
     for (let i = 0; i < M.SLOT_COUNT; i++) {
@@ -450,8 +463,9 @@
     controller.reconciling = false;
   }
   controller.reconcile(); controller.ready = true;
-  const startIndex = onlyEmptyTabs && saved ? M.slotIndex(saved.selected) : controller.selectedIndex;
-  controller.select(Math.max(0, startIndex), false);
+  const startIndex = restoreFallback ? M.slotIndex(saved.selected) : controller.selectedIndex;
+  if (hasRequestedPage && isEmpty(gBrowser.selectedTab)) controller.render();
+  else controller.select(Math.max(0, startIndex), false);
   controller.previousIndex = controller.selectedIndex;
   controller.showChrome(); controller.scheduleHide();
   if (!isPrivate) window.requestIdleCallback(async () => {

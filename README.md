@@ -83,7 +83,7 @@ python3 -m venv .venv
 .venv/bin/python tests/native_keys.py
 ```
 
-Tests create their own profiles and local HTTP fixtures. They cover real native tabs, page/chrome separation, transition/shader lifecycle, rapid cancellation, overflow and replacement, authentication popups, native downloads, migration, and session restore. The separate keyboard suite requires `xdotool` and an X11/XWayland display and checks real OS accelerators; WebDriver content key synthesis does not exercise browser shortcuts. Artifacts and measurements go into ignored `test-results/`. Only these test launches enable Marionette and remote system access; normal Still launches enable neither. Account passwords and Google authentication are never automated by the suite.
+Tests create their own profiles and local HTTP fixtures. They cover start-page and native address-bar submission, rendering after navigation, requested URLs in new windows, migration fallback ownership, real native tabs, page/chrome separation, transition/shader lifecycle, rapid cancellation, overflow and replacement, authentication popups, native downloads, migration, and session restore. The separate keyboard suite requires `xdotool` and an X11/XWayland display and checks real OS accelerators; WebDriver content key synthesis does not exercise browser shortcuts. Artifacts and measurements go into ignored `test-results/`. Only these test launches enable Marionette and remote system access; normal Still launches enable neither. Account passwords and Google authentication are never automated by the suite.
 
 ## License
 
