@@ -181,8 +181,8 @@ def main():
           function sample(){
             if(effect.animation?.playState==='running')runningFrames++;
             if(effect.target)shifts.push(new DOMMatrixReadOnly(getComputedStyle(effect.target).transform).m41);
-            if(performance.now()-started<310)requestAnimationFrame(sample);
-            else done({runningFrames,shifts,clean:!effect.animation&&!effect.exitAnimation&&!document.querySelector('[still-entering],[still-exiting],[still-transition]')});
+            if(performance.now()-started<650)requestAnimationFrame(sample);
+            else done({runningFrames,shifts,clean:!effect.animation&&!document.querySelector('[still-entering],[still-exiting],[still-transition]')});
           }requestAnimationFrame(sample);''')
         check('native content focus leaves a visible, multi-frame transition running', motion['runningFrames'] >= 4 and len(motion['shifts']) >= 4 and max(motion['shifts']) - min(motion['shifts']) > 30)
         check('completed slide releases both native panels and all transition attributes', motion['clean'])
@@ -194,7 +194,7 @@ def main():
             result = m.execute_async_script('window.StillBrowser.measureFrames(2500,true).then(arguments[arguments.length-1]);')
             report['performance'][mode] = result
             print('FRAMES', mode, json.dumps(result), flush=True)
-            time.sleep(.3)
+            time.sleep(.65)
             check(f'{mode} settles without an idle shader loop', m.execute_script('return window.StillBrowser.effects.frame===0 && document.getElementById("still-effects").hidden && gBrowser.tabpanels.getAnimations({subtree:true}).length===0 && !document.querySelector("[still-entering],[still-exiting],[still-transition]");'))
         gpu = m.execute_script('return Boolean(window.StillBrowser.effects.gl) && !window.StillBrowser.effects.failed;')
         report['gpuShader'] = gpu
@@ -202,8 +202,8 @@ def main():
         if os.environ.get('STILL_REQUIRE_GPU') == '1':
             check('hardware test requires a working GPU shader', gpu)
         m.execute_script('window.StillBrowser.setMotion("elastic"); for(let i=0;i<150;i++) window.StillBrowser.select(i%5);')
-        check('rapid switching commits the newest selection', m.execute_script('return window.StillBrowser.selectedIndex===4 && gBrowser.tabpanels.getAnimations({subtree:true}).length<=2;'))
-        time.sleep(.3)
+        check('rapid switching commits the newest selection', m.execute_script('return window.StillBrowser.selectedIndex===4 && gBrowser.tabpanels.getAnimations({subtree:true}).length<=1;'))
+        time.sleep(.65)
         check('rapid switching leaves no animations behind', m.execute_script('return gBrowser.tabpanels.getAnimations({subtree:true}).length===0 && !document.querySelector("[still-entering],[still-exiting],[still-transition]");'))
         m.execute_script('window.openWebLinkIn(arguments[0],"tab");', [origin + '/Incoming'])
         wait(m, 'return !document.getElementById("still-replace").hidden;')

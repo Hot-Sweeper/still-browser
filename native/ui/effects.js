@@ -7,7 +7,6 @@
       this.canvas = canvas;
       this.panel = panel;
       this.animation = null;
-      this.exitAnimation = null;
       this.target = null;
       this.outgoing = null;
       this.pendingTab = null;
@@ -22,9 +21,7 @@
       if (this.frame) this.win.cancelAnimationFrame(this.frame);
       this.frame = 0;
       this.animation?.cancel();
-      this.exitAnimation?.cancel();
       this.animation = null;
-      this.exitAnimation = null;
       this.target?.removeAttribute('still-entering');
       this.outgoing?.removeAttribute('still-exiting');
       this.panel.removeAttribute('still-transition');
@@ -80,13 +77,19 @@
         ? this.win.gBrowser.tabContainer.getRelatedElement(previousTab) : null;
       const sign = Math.sign(direction) || 1;
       const paired = outgoing && outgoing !== target && !outgoing.classList.contains('split-view-panel');
+      // A discarded/closing previous tab has no reliable surface to cover the
+      // viewport. Leave that cold switch entirely to Gecko instead of exposing
+      // a blank strip underneath an incoming transform.
+      if (!paired) return;
       this.target = target; this.pendingTab = tab; this.directionSign = sign; this.mode = mode;
       this.panel.setAttribute('still-transition', '');
       target.setAttribute('still-entering', '');
-      const distance = paired ? `${sign * 100}%` : `${sign * 112}px`;
+      const distance = `${sign * 100}%`;
       const squash = mode === 'slide' ? '' : ' scaleX(.992) scaleY(1.004)';
       const transformOrigin = sign > 0 ? 'left center' : 'right center';
-      const timing = { duration: mode === 'slide' ? 220 : 260, easing: 'cubic-bezier(.22,.75,.22,1)', fill: 'both' };
+      const speed = this.win.Services.prefs.getStringPref('still.motion.speed', 'smooth');
+      const duration = ({ fast: 240, normal: 400, smooth: 560 })[speed] || 560;
+      const timing = { duration, easing: 'cubic-bezier(.32,0,.2,1)', fill: 'both' };
       this.animation = target.animate([
         { transform: `translateX(${distance})${squash}`, transformOrigin },
         { transform: 'translateX(0) scale(1)', transformOrigin }
@@ -95,10 +98,8 @@
       if (paired) {
         this.outgoing = outgoing;
         outgoing.setAttribute('still-exiting', '');
-        this.exitAnimation = outgoing.animate([
-          { transform: 'translateX(0)' }, { transform: `translateX(${-sign * 100}%)` }
-        ], timing);
-        this.exitAnimation.pause();
+        // Keep the full cached surface underneath until the incoming page
+        // covers it. Fractional scaling and cold paints cannot open a seam.
       }
       const token = this.generation;
       this.animation.onfinish = () => { if (token === this.generation) this.cancel(); };
@@ -110,7 +111,7 @@
       const browser = tab.linkedBrowser;
       if (!browser.hasLayers || browser.hasAttribute('blank') || browser.hasAttribute('pendingpaint')) return;
       this.win.clearTimeout(this.readyTimer); this.readyTimer = 0;
-      this.animation.play(); this.exitAnimation?.play();
+      this.animation.play();
       const mode = this.mode, direction = this.directionSign;
       if (mode !== 'ripple' || !this.initialize()) return;
       const scale = Math.min(this.win.devicePixelRatio || 1, 1.5);
@@ -121,9 +122,10 @@
       this.gl.uniform1f(this.direction, direction);
       this.canvas.hidden = false;
       const began = this.win.performance.now(), token = this.generation;
+      const duration = this.animation.effect.getTiming().duration;
       const draw = (now) => {
         if (token !== this.generation) return;
-        const progress = Math.min(1, (now - began) / 220);
+        const progress = Math.min(1, (now - began) / duration);
         this.gl.uniform1f(this.time, progress);
         this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
         if (progress < 1) this.frame = this.win.requestAnimationFrame(draw);

@@ -133,11 +133,11 @@
       this.scheduleHide();
       this.render();
     },
-    onSelect() {
+    onSelect(previousTab = this.slots[this.previousIndex]) {
       const index = this.selectedIndex;
       if (index < 0) { effects.cancel(); this.showReplacement(); return; }
       if (this.ready && !this.suppressMotion && index !== this.previousIndex) {
-        effects.prepare(this.slots[index], this.slots[this.previousIndex], index - this.previousIndex);
+        effects.prepare(this.slots[index], previousTab, index - this.previousIndex);
         window.queueMicrotask(() => effects.present(gBrowser.selectedTab));
         this.animationsStarted++;
       }
@@ -241,6 +241,11 @@
       Services.prefs.setStringPref('still.motion', value);
       effects.cancel();
       if (value === 'ripple') window.requestIdleCallback(() => effects.initialize());
+    },
+    setMotionSpeed(value) {
+      if (!['fast', 'normal', 'smooth'].includes(value)) return;
+      Services.prefs.setStringPref('still.motion.speed', value);
+      effects.cancel();
     },
     setTheme(value) {
       if (!['system', 'light', 'dark'].includes(value)) return;
@@ -380,7 +385,8 @@
     for (const [value, title] of values) select.append(html('option', { value }, title));
     select.value = current; listen(select, 'change', () => onChange(select.value)); label.append(select); menu.append(label);
   };
-  selectSetting('Motion', 'still-motion', [['elastic','Elastic / squish'],['slide','Quick slide'],['ripple','Ripple'],['off','Instant']], Services.prefs.getStringPref('still.motion', 'elastic'), value => controller.setMotion(value));
+  selectSetting('Motion', 'still-motion', [['elastic','Elastic / squish'],['slide','Slide'],['ripple','Ripple'],['off','Instant']], Services.prefs.getStringPref('still.motion', 'elastic'), value => controller.setMotion(value));
+  selectSetting('Speed', 'still-motion-speed', [['smooth','Relaxed'],['normal','Balanced'],['fast','Fast']], Services.prefs.getStringPref('still.motion.speed', 'smooth'), value => controller.setMotionSpeed(value));
   selectSetting('Theme', 'still-theme', [['system','System'],['light','Light'],['dark','Dark']], Services.prefs.getStringPref('still.theme','system'), value => controller.setTheme(value));
   menu.append(html('hr'));
   menuAction('Browser settings', () => window.openTrustedLinkIn('about:preferences', 'tab'));
@@ -437,7 +443,7 @@
   listen(gBrowser.tabContainer, 'TabOpen', () => controller.scheduleReconcile());
   listen(gBrowser.tabContainer, 'TabClose', () => controller.scheduleReconcile());
   listen(gBrowser.tabContainer, 'SSTabRestored', () => controller.scheduleReconcile());
-  listen(gBrowser.tabContainer, 'TabSelect', () => controller.onSelect());
+  listen(gBrowser.tabContainer, 'TabSelect', event => controller.onSelect(event.detail.previousTab));
   controller.mutations = new window.MutationObserver(() => {
     if (controller.mutationTimer) return;
     controller.mutationTimer = setTimeout(() => { controller.mutationTimer = 0; controller.render(); }, 45);
