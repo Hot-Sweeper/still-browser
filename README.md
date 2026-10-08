@@ -10,8 +10,8 @@
 Still is a calm, open-source Chromium browser built around five fixed browsing slots. It keeps a small working set visible, restores it between launches, and avoids the usual ever-growing tab bar.
 
 [![CI](https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml)
-[![Status: Experimental alpha](https://img.shields.io/badge/status-experimental%20alpha-ffe45c?labelColor=08090b)](https://github.com/Hot-Sweeper/still-browser/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-ffe45c?labelColor=08090b)](LICENSE)
+[![Status: Experimental alpha](https://img.shields.io/badge/status-experimental%20alpha-eceeec?labelColor=08090b)](https://github.com/Hot-Sweeper/still-browser/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-eceeec?labelColor=08090b)](LICENSE)
 
 ## Highlights
 
