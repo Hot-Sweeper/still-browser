@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/logo-ascii.png" width="144" height="144" alt="Still's complete original app icon converted to ASCII, preserving the original rounded corners and transparency">
+  <img src=".github/assets/logo-ascii.png?v=white-hires" width="144" height="144" alt="Still's white logo mark in high-density ASCII, on a transparent background">
 </p>
 
 <h1 align="center">Still Browser</h1>
