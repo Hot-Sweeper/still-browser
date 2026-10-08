@@ -64,15 +64,15 @@ npm start
 
 ## Keyboard and mouse controls
 
-- `Ctrl+L` — search or enter an address
-- `Ctrl+T` — use the next empty slot
-- `Ctrl+W` — clear the current slot
-- `Ctrl+1` through `Ctrl+5` — switch slots
-- `Alt+Left` / `Alt+Right` — back / forward
-- Mouse Back / Forward buttons — back / forward
-- Middle-click a link — open it using the same slot chooser as an incoming URL
-- `Ctrl+R` or `F5` — reload
-- `Ctrl+Shift+R` — hard reload without cache
+- `Ctrl+L`: search or enter an address
+- `Ctrl+T`: use the next empty slot
+- `Ctrl+W`: clear the current slot
+- `Ctrl+1` through `Ctrl+5`: switch slots
+- `Alt+Left` / `Alt+Right`: back / forward
+- Mouse Back / Forward buttons: back / forward
+- Middle-click a link: open it using the same slot chooser as an incoming URL
+- `Ctrl+R` or `F5`: reload
+- `Ctrl+Shift+R`: hard reload without cache
 
 Move the pointer to the physical top edge of the window to reveal the slot rail. Double-click an occupied slot to edit its address, or click an empty slot to search immediately.
 
