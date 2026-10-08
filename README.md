@@ -2,7 +2,7 @@
   <img src=".github/assets/logo-ascii.png" width="144" height="144" alt="Still's complete original app icon converted to ASCII, preserving the original rounded corners and transparency">
 </p>
 
-<h1 align="center"><samp>Still Browser</samp></h1>
+<h1 align="center">Still Browser</h1>
 
 <p align="center"><strong>Five slots. A calmer browser.</strong></p>
 
