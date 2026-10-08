@@ -1,9 +1,17 @@
+<picture>
+  <source media="(max-width: 600px)" srcset=".github/assets/banner-mobile.png">
+  <img src=".github/assets/banner.png" alt="Still Browser by Mr. Lemon — experimental alpha. Five fixed browsing slots. No stable release yet." width="1600">
+</picture>
+
 # Still Browser
+
+> **Experimental · Alpha — no stable release yet.** Still is under active development. Available downloads are test builds; features and behavior may change, and bugs are expected.
 
 Still is a calm, open-source Chromium browser built around five fixed browsing slots. It keeps a small working set visible, restores it between launches, and avoids the usual ever-growing tab bar.
 
 [![CI](https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Status: Experimental alpha](https://img.shields.io/badge/status-experimental%20alpha-ffe45c?labelColor=08090b)](https://github.com/Hot-Sweeper/still-browser/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-ffe45c?labelColor=08090b)](LICENSE)
 
 ## Highlights
 
@@ -17,9 +25,9 @@ Still is a calm, open-source Chromium browser built around five fixed browsing s
 - External application links (`mailto:`, Zoom, Teams, Spotify, and similar) require confirmation
 - Windows-only first-run migration for Opera GX bookmarks, history, cookies, and compatible extensions
 
-## Install a release
+## Try an alpha build
 
-Download the newest build from [GitHub Releases](https://github.com/Hot-Sweeper/still-browser/releases):
+There is no stable release yet. To help test Still, download an experimental prerelease build from [GitHub Releases](https://github.com/Hot-Sweeper/still-browser/releases):
 
 - Linux: use the portable `.AppImage`, or install the `.deb` on Debian, Ubuntu, or Linux Mint.
 - Windows: run the portable `.exe`.
@@ -95,3 +103,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow. Please repo
 ## License
 
 [MIT](LICENSE)
+
+---
+
+Built by [Mr. Lemon / Hot-Sweeper](https://github.com/Hot-Sweeper) · [Peak & Peak Studio](https://github.com/Hot-Sweeper/peak-and-peak-studio) · [Branding](https://github.com/Hot-Sweeper/Hot-Sweeper/blob/main/BRANDING.md)
