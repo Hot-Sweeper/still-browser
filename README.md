@@ -1,17 +1,28 @@
-<picture>
-  <source media="(max-width: 600px)" srcset=".github/assets/banner-mobile.png">
-  <img src=".github/assets/banner.png" alt="Still Browser by Mr. Lemon — experimental alpha. Five fixed browsing slots. No stable release yet." width="1600">
-</picture>
+<p align="center">
+  <img src=".github/assets/logo-ascii.png" width="144" height="144" alt="Still's complete original app icon converted to ASCII, preserving the original rounded corners and transparency">
+</p>
 
-# Still Browser
+<h1 align="center"><samp>Still Browser</samp></h1>
 
-> **Experimental · Alpha — no stable release yet.** Still is under active development. Available downloads are test builds; features and behavior may change, and bugs are expected.
+<p align="center"><strong>Five slots. A calmer browser.</strong></p>
 
-Still is a calm, open-source Chromium browser built around five fixed browsing slots. It keeps a small working set visible, restores it between launches, and avoids the usual ever-growing tab bar.
+<p align="center">
+  <a href="https://github.com/Hot-Sweeper/still-browser/releases"><img src="https://img.shields.io/badge/EXPERIMENTAL-ALPHA-eceeec?style=flat-square&amp;labelColor=161b22" alt="Experimental alpha"></a>
+  <a href="https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml"><img src="https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-eceeec?style=flat-square&amp;labelColor=161b22" alt="MIT license"></a>
+</p>
 
-[![CI](https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Hot-Sweeper/still-browser/actions/workflows/ci.yml)
-[![Status: Experimental alpha](https://img.shields.io/badge/status-experimental%20alpha-eceeec?labelColor=08090b)](https://github.com/Hot-Sweeper/still-browser/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-eceeec?labelColor=08090b)](LICENSE)
+<p align="center">
+  <a href="https://github.com/Hot-Sweeper/still-browser/releases"><strong>Try an alpha build →</strong></a> &nbsp; · &nbsp;
+  <a href="#run-from-source">Run from source</a> &nbsp; · &nbsp;
+  <a href="https://github.com/Hot-Sweeper/still-browser/issues">Report a bug</a>
+</p>
+
+---
+
+> **Experimental alpha. No stable release yet.** Available downloads are test builds. Features and behavior may change, and bugs are expected.
+
+Still is a Chromium browser built around five fixed browsing slots. It keeps your working set visible, restores it between launches, and avoids the usual ever-growing tab bar.
 
 ## Highlights
 
@@ -106,4 +117,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow. Please repo
 
 ---
 
-Built by [Mr. Lemon / Hot-Sweeper](https://github.com/Hot-Sweeper) · [Peak & Peak Studio](https://github.com/Hot-Sweeper/peak-and-peak-studio) · [Branding](https://github.com/Hot-Sweeper/Hot-Sweeper/blob/main/BRANDING.md)
+<p align="center"><sub>Built by <a href="https://github.com/Hot-Sweeper">Mr. Lemon</a> · <a href="https://github.com/Hot-Sweeper/peak-and-peak-studio">Peak &amp; Peak Studio</a></sub></p>
