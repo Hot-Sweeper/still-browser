@@ -22,7 +22,7 @@
 
 > **Experimental alpha. No stable release yet.** Available downloads are test builds. Features and behavior may change, and bugs are expected.
 
-Still is a Chromium browser built around five fixed browsing slots. It keeps your working set visible, restores it between launches, and avoids the usual ever-growing tab bar.
+Still is a Chromium browser with five fixed browsing slots, for anyone whose tab bar has become a row of microscopic favicons. You can drag the slots around, keep your working set visible, and pick it back up after a restart. The slot limit is my attempt at solving tab hoarding through software instead of personal growth.
 
 ## Highlights
 
