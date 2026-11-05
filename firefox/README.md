@@ -174,3 +174,32 @@ pinned to `cdc95c93c91b09d3a4c38be355b5ef5bfd631075`. The portable MozillaBuild
 toolchain is unpacked to `D:\MozillaBuild`; its installer has **not** run.
 A compiled fork is only needed if autoconfig stops being enough (branding,
 installer, signing Still's extension).
+
+## Linux setup
+
+Use Node 22.12 or newer and a native Firefox 159.0.1 or newer. On Arch and
+CachyOS, the default source runtime is `/usr/lib/firefox`. Override it with
+`STILL_FIREFOX_SOURCE_RUNTIME` on distributions using another directory.
+
+```sh
+npm ci --ignore-scripts
+npm run firefox:check
+node scripts/build-searxng.js
+npm run firefox:shortcut
+npm run firefox:run
+```
+
+The Linux runtime and profile live under `$XDG_DATA_HOME/still`, defaulting to
+`~/.local/share/still`. Runtime executables, permissions and distro library
+symlinks are preserved. Still Search uses its native Linux executable. Windows
+icon APIs remain gated; page actors handle gestures inside Firefox on Wayland.
+`node firefox/tools/create-shortcut.js --remove` removes the Linux desktop entry.
+
+Copy personal profiles only while the source browser is closed. Preserve an
+untouched backup and use a separate working profile. Login sessions, external
+authentication, audio/video and gesture behavior still require normal manual
+checks. Never attach the UI automation harness to a personal profile.
+
+The runtime is a private copy. After a system Firefox security update, close
+Still, remove only its runtime `.still-runtime-complete` marker, and rerun the
+launcher to refresh the runtime. Never remove the profile to update Firefox.

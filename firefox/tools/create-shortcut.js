@@ -11,6 +11,30 @@ const path = require('node:path');
 const { install } = require('../install-runtime');
 
 const root = path.resolve(__dirname, '..', '..');
+
+if (process.platform === 'linux') {
+  const applications = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'applications');
+  const entry = path.join(applications, 'still.desktop');
+  if (process.argv.includes('--remove')) {
+    fs.rmSync(entry, { force: true });
+  } else {
+    install();
+    fs.mkdirSync(applications, { recursive: true });
+    const quote = (value) => '"' + value.replace(/["`$\\]/g, '\\$&') + '"';
+    fs.writeFileSync(entry, [
+      '[Desktop Entry]', 'Type=Application', 'Name=Still',
+      'Comment=Still Firefox browser',
+      `Exec=${quote(process.execPath)} ${quote(path.join(root, 'firefox', 'launcher.js'))} %U`,
+      `Icon=${path.join(root, 'src', 'assets', 'still-icon.png')}`,
+      'Terminal=false', 'Categories=Network;WebBrowser;',
+      'MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;',
+      'StartupWMClass=still', ''
+    ].join('\n'));
+  }
+  console.log(`Still Linux desktop entry: ${entry}`);
+  process.exit(0);
+}
+
 const prototypeRoot = path.join(path.parse(root).root, 'Still Firefox Prototype');
 const profile = process.env.STILL_FIREFOX_PROFILE || path.join(prototypeRoot, 'profile');
 const backup = path.join(prototypeRoot, 'backup');

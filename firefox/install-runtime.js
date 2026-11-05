@@ -5,8 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const prototypeRoot = path.join(path.parse(root).root, 'Still Firefox Prototype', 'runtime');
-const sourceRuntime = process.env.STILL_FIREFOX_SOURCE_RUNTIME || path.join(prototypeRoot, 'core');
+const windows = process.platform === 'win32';
+const executableName = windows ? 'firefox.exe' : 'firefox';
+const dataRoot = path.join(process.env.XDG_DATA_HOME || path.join(require('node:os').homedir(), '.local', 'share'), 'still');
+const prototypeRoot = windows ? path.join(path.parse(root).root, 'Still Firefox Prototype', 'runtime') : path.join(dataRoot, 'runtime');
+const sourceRuntime = process.env.STILL_FIREFOX_SOURCE_RUNTIME || (windows ? path.join(prototypeRoot, 'core') : '/usr/lib/firefox');
 const userRuntime = process.env.STILL_FIREFOX_RUNTIME || path.join(prototypeRoot, 'still');
 // Automated checks use their own copy, so they never change the files of a
 // Still that is open (a running Still mixing old and new files breaks).
@@ -18,6 +21,7 @@ const chromeSource = path.join(__dirname, 'chrome');
 function copyFile(source, target) {
   try {
     fs.copyFileSync(source, target);
+    if (!windows) fs.chmodSync(target, fs.statSync(source).mode & 0o777);
   } catch (error) {
     const same = fs.existsSync(target) && fs.statSync(target).size === fs.statSync(source).size;
     if (!same || !['EPERM', 'EBUSY'].includes(error.code)) {
@@ -32,7 +36,15 @@ function copyDirectory(from, to, skip = () => false) {
     if (skip(entry.name)) continue;
     const source = path.join(from, entry.name);
     const target = path.join(to, entry.name);
-    if (entry.isDirectory()) copyDirectory(source, target, skip);
+    if (entry.isSymbolicLink() && !windows) {
+      // Distro runtimes can contain optional dangling library links. Preserve
+      // the source target without turning a relative link into a broken copy.
+      const link = fs.readlinkSync(source);
+      const resolved = path.resolve(path.dirname(source), link);
+      fs.rmSync(target, { force: true });
+      fs.symlinkSync(resolved, target);
+    }
+    else if (entry.isDirectory()) copyDirectory(source, target, skip);
     else copyFile(source, target);
   }
 }
@@ -47,12 +59,13 @@ function syncDirectory(from, to, keep = []) {
 }
 
 function install(runtime = userRuntime) {
-  if (!fs.existsSync(path.join(runtime, 'firefox.exe'))) {
-    if (!fs.existsSync(path.join(sourceRuntime, 'firefox.exe'))) {
+  if (!fs.existsSync(path.join(runtime, '.still-runtime-complete'))) {
+    if (!fs.existsSync(path.join(sourceRuntime, executableName))) {
       throw new Error(`Firefox runtime not found: ${sourceRuntime}`);
     }
     console.log(`Copying Firefox runtime to ${runtime}`);
     copyDirectory(sourceRuntime, runtime);
+    fs.writeFileSync(path.join(runtime, '.still-runtime-complete'), '1\n');
   }
   fs.rmSync(path.join(runtime, 'autoconfig-ok.txt'), { force: true });
   fs.mkdirSync(path.join(runtime, 'defaults', 'pref'), { recursive: true });
@@ -68,7 +81,7 @@ function install(runtime = userRuntime) {
   const searchSource = path.join(root, 'build', 'searxng-sidecar');
   const searchTarget = path.join(target, 'searxng');
   const stamp = (dir) => { try { return fs.readFileSync(path.join(dir, 'still-build.json'), 'utf8'); } catch { return ''; } };
-  if (fs.existsSync(path.join(searchSource, 'searxng-sidecar.exe')) && stamp(searchSource) !== stamp(searchTarget)) {
+  if (fs.existsSync(path.join(searchSource, windows ? 'searxng-sidecar.exe' : 'searxng-sidecar')) && stamp(searchSource) !== stamp(searchTarget)) {
     fs.rmSync(searchTarget, { recursive: true, force: true });
     copyDirectory(searchSource, searchTarget, (name) => name.endsWith('.tar.gz'));
   }
@@ -86,4 +99,4 @@ if (require.main === module) {
   try { install(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
 
-module.exports = { install, runtime: userRuntime, testRuntime };
+module.exports = { install, runtime: userRuntime, testRuntime, executableName, dataRoot };

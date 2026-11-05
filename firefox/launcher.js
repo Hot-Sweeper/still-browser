@@ -4,11 +4,11 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { install } = require('./install-runtime');
+const { install, executableName, dataRoot } = require('./install-runtime');
 
 const root = path.resolve(__dirname, '..');
 const prototypeRoot = path.join(path.parse(root).root, 'Still Firefox Prototype');
-const profile = process.env.STILL_FIREFOX_PROFILE || path.join(prototypeRoot, 'profile');
+const profile = process.env.STILL_FIREFOX_PROFILE || (process.platform === 'win32' ? path.join(prototypeRoot, 'profile') : path.join(dataRoot, 'profile'));
 
 async function main() {
   if (!fs.existsSync(path.join(__dirname, 'build', 'manifest.json'))) {
@@ -18,7 +18,7 @@ async function main() {
   fs.mkdirSync(profile, { recursive: true });
 
   console.log(`Profile: ${profile}`);
-  const child = spawn(path.join(runtime, 'firefox.exe'), ['-profile', profile, '--wait-for-browser', ...process.argv.slice(2)], {
+  const child = spawn(path.join(runtime, executableName), ['-profile', profile, '--wait-for-browser', ...process.argv.slice(2)], {
     cwd: runtime,
     stdio: 'inherit'
   });

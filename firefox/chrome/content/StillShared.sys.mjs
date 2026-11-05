@@ -386,7 +386,7 @@ function superviseSearch(win) {
 }
 
 async function runSearch(win) {
-  const exe = stillFile("searxng", "searxng-sidecar.exe");
+  const exe = stillFile("searxng", Services.appinfo.OS === "WINNT" ? "searxng-sidecar.exe" : "searxng-sidecar");
   if (!exe.exists()) return;
   if (search) return;
   const existing = await searchState(win);
