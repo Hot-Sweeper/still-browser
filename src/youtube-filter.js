@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 19;
+  const VERSION = 21;
   const existing = window.__stillLearningFilter;
   if (existing?.version === VERSION) {
     existing.update(window.__stillLearningFilterConfig || {});
@@ -199,6 +199,33 @@
           margin-top: 0 !important;
         }
 
+        /* Full focus: no recommendations beside or under the video, and
+           none in fullscreen, on pause, or when it ends. A playlist or live
+           chat keeps its column (still-youtube-side-panel, set by the UI). */
+        html.still-youtube-watch-cinema ytd-watch-flexy #related,
+        html.still-youtube-watch-cinema ytd-watch-flexy ytd-watch-next-secondary-results-renderer,
+        html.still-youtube-watch-cinema:not(.still-youtube-side-panel) ytd-watch-flexy #secondary,
+        html.still-youtube-watch-cinema #movie_player .ytp-fullscreen-grid,
+        html.still-youtube-watch-cinema #movie_player .ytp-fullscreen-grid-expand-button,
+        html.still-youtube-watch-cinema #movie_player .html5-endscreen.videowall-endscreen,
+        html.still-youtube-watch-cinema #movie_player .ytp-pause-overlay,
+        html.still-youtube-watch-cinema #movie_player .ytp-suggested-action {
+          display: none !important;
+        }
+        /* With no side column, the details and comments use the full width. */
+        html.still-youtube-watch-cinema:not(.still-youtube-side-panel) ytd-watch-flexy > #columns {
+          max-width: none !important;
+          margin-inline: 0 !important;
+        }
+        html.still-youtube-watch-cinema:not(.still-youtube-side-panel) ytd-watch-flexy[theater] > #columns > #primary,
+        html.still-youtube-watch-cinema:not(.still-youtube-side-panel) ytd-watch-flexy[full-bleed-player] > #columns > #primary {
+          width: 100% !important;
+          max-width: none !important;
+          margin: 0 !important;
+          padding-inline: 32px !important;
+          box-sizing: border-box !important;
+        }
+
         /* YouTube's lightweight/legacy watch shell uses these direct children. */
         html.still-youtube-watch-cinema body > #player.flexy,
         html.still-youtube-watch-cinema body > #player.skeleton {
@@ -368,6 +395,8 @@
     }
   }
 
+  let cinemaAttempts = 0;
+  let cinemaAttemptsFor = '';
   function ensureCinemaMode() {
     clearTimeout(cinemaTimer);
     const videoId = location.pathname === '/watch'
@@ -394,8 +423,13 @@
       cinemaTimer = setTimeout(ensureCinemaMode, 250);
       return;
     }
-    cinemaVideoKey = videoId;
+    // YouTube sometimes ignores a click made while the player is still
+    // starting. Check that theater mode took, and try again a few times.
+    cinemaAttempts = cinemaAttemptsFor === videoId ? cinemaAttempts + 1 : 1;
+    cinemaAttemptsFor = videoId;
+    if (cinemaAttempts > 4) { cinemaVideoKey = videoId; return; }
     theaterButton.click();
+    cinemaTimer = setTimeout(ensureCinemaMode, 700);
   }
 
   function identity(value) {
@@ -409,7 +443,7 @@
   function feedMode() {
     try {
       const value = localStorage.getItem('still-youtube-feed-mode');
-      return ['normal', 'selective', 'music', 'subscriptions'].includes(value) ? value : 'selective';
+      return ['normal', 'selective', 'music', 'subscriptions', 'history'].includes(value) ? value : 'selective';
     } catch {
       return 'selective';
     }

@@ -1,51 +1,38 @@
+// Starts Still on Firefox: Still's runtime (see install-runtime.js) with a
+// persistent profile. The browser starts Still Search itself. No automation or
+// remote debugging is attached, so sites see an ordinary Firefox.
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { startLocalSearxng } = require('../src/searxng');
+const { install } = require('./install-runtime');
 
 const root = path.resolve(__dirname, '..');
-const searchPort = 48230;
-const firefoxBinary = process.env.STILL_FIREFOX_BINARY
-  || path.join(path.parse(root).root, 'Still Firefox Prototype', 'runtime', 'core', 'firefox.exe');
-const webExt = path.join(root, 'node_modules', 'web-ext', 'bin', 'web-ext.js');
-const sourceDir = path.join(__dirname, 'build');
-const localData = path.join(__dirname, '.local');
+const prototypeRoot = path.join(path.parse(root).root, 'Still Firefox Prototype');
+const profile = process.env.STILL_FIREFOX_PROFILE || path.join(prototypeRoot, 'profile');
 
 async function main() {
-  if (!fs.existsSync(firefoxBinary)) {
-    throw new Error(`Firefox runtime not found: ${firefoxBinary}\nSet STILL_FIREFOX_BINARY to the signed Firefox executable.`);
+  if (!fs.existsSync(path.join(__dirname, 'build', 'manifest.json'))) {
+    throw new Error('Run npm run firefox:build before launching Still on Firefox.');
   }
-  if (!fs.existsSync(webExt)) throw new Error('Run npm install before launching the prototype.');
-  if (!fs.existsSync(path.join(sourceDir, 'manifest.json'))) {
-    throw new Error('Run npm run firefox:build before launching the prototype.');
-  }
-  fs.mkdirSync(localData, { recursive: true });
-  const search = await startLocalSearxng({
-    isPackaged: false,
-    appPath: root,
-    userDataPath: localData,
-    fixedPort: searchPort
-  });
-  console.log(`Still Search ready at ${search.baseUrl}`);
+  const runtime = install();
+  fs.mkdirSync(profile, { recursive: true });
 
-  const child = spawn(process.execPath, [webExt, 'run', '--source-dir', sourceDir,
-    '--firefox', firefoxBinary, '--no-reload', '--no-input', ...process.argv.slice(2)], {
-    cwd: root,
-    stdio: 'inherit',
-    windowsHide: false
+  console.log(`Profile: ${profile}`);
+  const child = spawn(path.join(runtime, 'firefox.exe'), ['-profile', profile, '--wait-for-browser', ...process.argv.slice(2)], {
+    cwd: runtime,
+    stdio: 'inherit'
   });
   let stopping = false;
-  function stop(signal) {
+  const stop = (signal) => {
     if (stopping) return;
     stopping = true;
-    search.stop();
-    if (child.exitCode === null) child.kill(signal);
-  }
+    if (signal && child.exitCode === null) child.kill(signal);
+  };
   process.on('SIGINT', () => stop('SIGINT'));
   process.on('SIGTERM', () => stop('SIGTERM'));
   child.on('error', (error) => {
     stop();
-    console.error(error);
+    console.error(error.message);
     process.exitCode = 1;
   });
   child.on('exit', (code) => {

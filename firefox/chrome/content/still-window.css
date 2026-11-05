@@ -1,0 +1,1176 @@
+/* Still's window layer on Firefox. Visual language carried over from the
+   Electron build (src/styles.css): glass slots over an edge-to-edge page. */
+
+:root[still] {
+  --still-pill: rgba(246, 246, 243, 0.93);
+  --still-pill-strong: rgba(250, 250, 247, 0.96);
+  --still-pill-hover: rgba(255, 255, 252, 0.97);
+  --still-text: #252625;
+  --still-muted: #777b78;
+  --still-line: rgba(255, 255, 255, 0.48);
+  --still-glass-highlight: rgba(255, 255, 255, 0.54);
+  --still-accent: #555b57;
+  --still-shadow: 0 10px 32px rgba(16, 20, 17, 0.15), 0 2px 8px rgba(16, 20, 17, 0.08);
+  --still-ease: cubic-bezier(.16, 1, .3, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[still] {
+    --still-pill: rgba(23, 25, 24, 0.92);
+    --still-pill-strong: rgba(28, 30, 29, 0.95);
+    --still-pill-hover: rgba(36, 39, 37, 0.95);
+    --still-text: #eef0ee;
+    --still-muted: #969b97;
+    --still-line: rgba(255, 255, 255, 0.16);
+    --still-glass-highlight: rgba(255, 255, 255, 0.12);
+    --still-accent: #c5cac6;
+    --still-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.28);
+  }
+}
+
+/* ---------------------------------------------- Firefox chrome, tucked away
+   The toolbox stays laid out (permission prompts and add-on popups anchor to
+   it) but is invisible and takes no space or input. */
+
+:root[still] #navigator-toolbox {
+  position: fixed !important;
+  inset: 0 0 auto 0 !important;
+  margin-top: 0 !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
+  -moz-window-dragging: no-drag !important;
+}
+
+:root[still] #navigator-toolbox * {
+  -moz-window-dragging: no-drag !important;
+}
+
+:root[still] :is(#sidebar-main, #sidebar-launcher-splitter, #fullscr-toggler, #tabs-newtab-button, #firefox-view-button) {
+  display: none !important;
+}
+
+:root[still] {
+  /* Behind pages that have not reported their colour yet: black, not grey. */
+  --tabpanel-background-color: #000 !important;
+  background-color: #000 !important;
+}
+
+:root[still] browser[type="content"] {
+  background-color: var(--tabpanel-background-color, #000);
+}
+
+:root[still] body,
+:root[still] #browser,
+:root[still] #tabbrowser-tabbox,
+:root[still] #tabbrowser-tabpanels {
+  background-color: #000;
+}
+
+:root[still] #tabbrowser-tabbox {
+  overflow: clip;
+}
+
+:root[still] #tabbrowser-tabpanels > * .browserContainer {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  margin: 0 !important;
+}
+
+/* Slot strip: neighbouring slots stay painted while the strip moves. */
+:root[still] #tabbrowser-tabpanels > .still-slide-out {
+  -moz-subtree-hidden-only-visually: 0 !important;
+  visibility: inherit !important;
+  pointer-events: none;
+}
+
+:root[still] #tabbrowser-tabpanels > :is(.still-slide-out, .still-slide-in) {
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* ------------------------------------------------------------------ layer */
+
+#still-layer,
+#still-layer * {
+  box-sizing: border-box;
+}
+
+#still-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  color: var(--still-text);
+  font: 13px/1.3 Inter, "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
+  -moz-window-dragging: no-drag;
+}
+
+:root[inDOMFullscreen] #still-layer {
+  display: none;
+}
+
+#still-layer :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent);
+  outline-offset: 1px;
+}
+
+#still-layer button,
+#still-layer input {
+  color: inherit;
+  font: inherit;
+  appearance: none;
+  margin: 0;
+}
+
+#still-layer svg {
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The top band: Windows resizes in its first 8 px; below that, down to the
+   slots, it moves the window (the bar's own background does the same once
+   it is open). Nothing is drawn. */
+#still-reveal {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 18px;
+  pointer-events: auto;
+}
+
+#still-nav-stage {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#still-nav-stage[hidden] { display: none; }
+
+.still-nav-shot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Surfaces are solid tints. A blur would need a capture of the page
+   (Firefox cannot blur another process's content), which can never be live
+   and costs a full page repaint each time. */
+:is(#still-chrome .slot:not(.empty), #still-chrome .top-control, .utility-panel, .slot-suggestions, #still-tab-dock, #still-replacement-modal) {
+  background-color: var(--still-glass-tint);
+}
+
+#still-chrome .slot { --still-glass-tint: var(--still-pill); }
+#still-chrome .slot:hover { --still-glass-tint: var(--still-pill-hover); }
+.utility-panel,
+.slot-suggestions,
+#still-chrome .utility-button.panel-open { --still-glass-tint: var(--still-pill-strong); }
+#still-chrome .top-control { --still-glass-tint: var(--still-pill); }
+#still-chrome .top-control:hover { --still-glass-tint: var(--still-pill-hover); }
+#still-chrome .top-control.danger:hover { --still-glass-tint: #c84646; }
+#still-tab-dock { --still-glass-tint: rgba(246, 246, 247, .95); }
+#still-replacement-modal { --still-glass-tint: color-mix(in srgb, var(--still-pill-strong) 92%, transparent); }
+
+@media (prefers-color-scheme: dark) {
+  #still-tab-dock { --still-glass-tint: rgba(20, 21, 23, .94); }
+}
+
+/* ------------------------------------------------------------ edge cues */
+
+.still-edge-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50px;
+  pointer-events: none;
+  transform: scaleX(0);
+  transition: transform 420ms var(--still-ease);
+}
+
+.still-edge-fade.left {
+  left: 0;
+  transform-origin: left center;
+  background: linear-gradient(to right, #080a09 0%, rgba(8, 10, 9, .88) 22%, rgba(8, 10, 9, .48) 58%, transparent 100%);
+}
+
+.still-edge-fade.right {
+  right: 0;
+  transform-origin: right center;
+  background: linear-gradient(to right, transparent 0%, rgba(8, 10, 9, .48) 42%, rgba(8, 10, 9, .88) 78%, #080a09 100%);
+}
+
+:root[still-edge="new-slot"] .still-edge-fade.right {
+  transform: scaleX(1);
+  opacity: .55;
+}
+
+#still-new-slot-edge {
+  position: absolute;
+  top: 50%;
+  right: 15px;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--still-line);
+  border-radius: 17px;
+  background: var(--still-pill-strong);
+  box-shadow: var(--still-shadow);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transform: translate3d(58px, -50%, 0) scale(.86);
+  transition: transform 420ms var(--still-ease), opacity 150ms ease, background 140ms ease;
+}
+
+#still-new-slot-edge span {
+  font: 300 31px/1 "Segoe UI Variable", "Segoe UI", sans-serif;
+  transform: translateY(-1px);
+}
+
+:root[still-edge="new-slot"] #still-new-slot-edge {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(0, -50%, 0) scale(1);
+}
+
+:root[still-edge="new-slot"] #still-new-slot-edge:hover {
+  background: var(--still-pill-hover);
+}
+
+/* ------------------------------------------------------------ slot bar */
+
+#still-chrome {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 73px;
+  padding: 18px 194px 10px 14px;
+  pointer-events: none;
+}
+
+#still-chrome::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 -148px;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, .84) 0%, rgba(0, 0, 0, .64) 28%, rgba(0, 0, 0, .38) 54%, rgba(0, 0, 0, .14) 76%, transparent 100%);
+  transform: translateY(-26px);
+  transition: opacity 260ms ease, transform 420ms var(--still-ease);
+}
+
+#still-chrome.open,
+#still-chrome:focus-within {
+  pointer-events: auto;
+}
+
+#still-chrome.open::before,
+#still-chrome:focus-within::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#still-chrome .slot-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  pointer-events: none;
+}
+
+#still-chrome .slot,
+#still-chrome .top-control {
+  opacity: 0;
+  background: var(--still-pill);
+  border: 1px solid var(--still-line);
+  box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), var(--still-shadow);
+  transform: translateX(var(--entry-x, 0px)) translateY(-64px) scale(.96);
+  -moz-window-dragging: no-drag;
+  transition:
+    transform 430ms var(--still-ease),
+    opacity 210ms ease,
+    background 170ms ease,
+    border-color 170ms ease,
+    box-shadow 170ms ease;
+}
+
+#still-chrome:is(.open, :focus-within) :is(.slot, .top-control) {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+#still-chrome:is(.open, :focus-within) :is(.slot-row, .top-controls) {
+  pointer-events: auto;
+}
+
+#still-chrome.open :is(.slot, .top-control) {
+  transition-delay: var(--enter-delay, 0ms);
+}
+
+#still-chrome:not(.open) .slot:nth-child(1) { transition-delay: 96ms; }
+#still-chrome:not(.open) .slot:nth-child(2) { transition-delay: 72ms; }
+#still-chrome:not(.open) .slot:nth-child(3) { transition-delay: 48ms; }
+#still-chrome:not(.open) .slot:nth-child(4) { transition-delay: 24ms; }
+#still-chrome:not(.open) .slot:nth-child(5) { transition-delay: 0ms; }
+#still-chrome:not(.open) .top-control:nth-child(1) { transition-delay: 48ms; }
+#still-chrome:not(.open) .top-control:nth-child(2) { transition-delay: 32ms; }
+#still-chrome:not(.open) .top-control:nth-child(3) { transition-delay: 16ms; }
+#still-chrome:not(.open) .top-control:nth-child(4) { transition-delay: 0ms; }
+
+#still-chrome .slot {
+  position: relative;
+  min-width: 0;
+  height: 43px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 7px 0 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+#still-chrome .slot:hover { background: var(--still-pill-hover); }
+#still-chrome .slot.active { background: var(--still-pill); }
+#still-chrome .slot.active:hover { background: var(--still-pill-hover); }
+#still-chrome .slot:focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: 1px; }
+#still-chrome.open .slot.dragging { opacity: .42; transform: translateY(3px) scale(.97); }
+#still-chrome .slot.drop-target {
+  border-color: color-mix(in srgb, var(--still-accent) 70%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--still-accent) 23%, transparent), var(--still-shadow);
+}
+
+#still-chrome .slot.empty {
+  justify-content: center;
+  color: var(--still-muted);
+  background: color-mix(in srgb, var(--still-pill) 70%, transparent);
+  border-style: dashed;
+  box-shadow: 0 7px 22px rgba(16, 20, 17, 0.08);
+}
+
+.slot-empty-label { white-space: nowrap; }
+
+.slot-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+}
+
+#still-layer .slot-favicon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+#still-layer .slot-favicon.brand-favicon { border-radius: 7px; }
+
+#still-layer .slot-favicon.placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--still-muted);
+  background: color-mix(in srgb, var(--still-muted) 14%, transparent);
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* Loading: the favicon breathes until the page is ready. */
+#still-chrome .slot.loading .slot-icon {
+  animation: still-slot-loading 1.15s ease-in-out infinite alternate;
+}
+
+@keyframes still-slot-loading {
+  from { opacity: 1; }
+  to { opacity: .38; }
+}
+
+.slot-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+#still-chrome .slot-close {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--still-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+#still-chrome .slot-close svg { width: 14px; height: 14px; }
+#still-chrome .slot:is(:hover, .active, :focus-within) .slot-close { opacity: .72; }
+#still-chrome .slot-close:is(:hover, :focus-visible) {
+  color: var(--still-text);
+  background: color-mix(in srgb, var(--still-text) 9%, transparent);
+  opacity: 1;
+}
+
+.slot-editor {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+}
+
+.slot-editor input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0;
+  color: var(--still-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 13px;
+  user-select: text;
+}
+
+.slot-editor input::placeholder { color: var(--still-muted); }
+
+.slot-suggestions {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 9px);
+  left: 0;
+  width: min(390px, calc(100vw - 28px));
+  padding: 6px;
+  overflow: hidden;
+  background: var(--still-pill-strong);
+  border: 1px solid var(--still-line);
+  border-radius: 15px;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, .35);
+}
+
+#still-chrome .slot:nth-child(n+4) .slot-suggestions { left: auto; right: 0; }
+.slot-suggestions[hidden] { display: none; }
+
+#still-layer .slot-suggestion {
+  width: 100%;
+  display: block;
+  padding: 9px 10px;
+  overflow: hidden;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.slot-suggestion span,
+.slot-suggestion small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-suggestion span { font-size: 13px; }
+.slot-suggestion small { margin-top: 2px; color: var(--still-muted); font-size: 11px; }
+#still-layer .slot-suggestion:is(.selected, :hover) { background: color-mix(in srgb, var(--still-accent) 15%, transparent); }
+#still-layer .slot-suggestion.search-option { border-top: 1px solid var(--still-line); border-radius: 0 0 10px 10px; }
+#still-layer .slot-suggestion.search-option:first-child { border-top: 0; border-radius: 10px; }
+
+/* ------------------------------------------------------- window controls */
+
+.top-controls {
+  position: absolute;
+  top: 18px;
+  right: 14px;
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+}
+
+#still-chrome .top-control {
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 13px;
+  cursor: pointer;
+}
+
+#still-chrome .top-control:hover { background: var(--still-pill-hover); }
+#still-chrome .top-control:focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: 1px; }
+#still-chrome .top-control.danger:hover { color: #fff; background: #c84646; border-color: #c84646; }
+.control-icon { width: 17px; height: 17px; }
+
+.utility-icon-stage {
+  position: relative;
+  width: 21px;
+  height: 21px;
+  display: block;
+  overflow: hidden;
+}
+
+.utility-glyph {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.utility-glyph svg { width: 20px; height: 20px; }
+.utility-glyph .theme-mode-icon .theme-fill { fill: currentColor; stroke: none; }
+.utility-button.bookmarked .utility-glyph svg { fill: currentColor; }
+.utility-button.dock-slide-enabled .tab-dock-mode-icon rect { fill: currentColor; fill-opacity: .22; }
+#still-chrome .utility-button.panel-open { background: var(--still-pill-strong); }
+
+/* --------------------------------------------------------- utility panel */
+
+.utility-panel {
+  position: absolute;
+  z-index: 55;
+  top: 66px;
+  right: 148px;
+  width: min(340px, calc(100vw - 28px));
+  max-height: min(480px, calc(100vh - 90px));
+  padding: 7px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--still-muted) 45%, transparent) transparent;
+  background: var(--still-pill-strong);
+  border: 1px solid var(--still-line);
+  border-radius: 17px;
+  box-shadow: inset 0 1px 0 var(--still-glass-highlight), 0 22px 58px rgba(0, 0, 0, .30), var(--still-shadow);
+  pointer-events: auto;
+  -moz-window-dragging: no-drag;
+  transform-origin: calc(100% - 20px) top;
+  animation: still-panel-in 230ms var(--still-ease) both;
+}
+
+.utility-panel[hidden] { display: none; }
+
+@keyframes still-panel-in {
+  from { opacity: 0; filter: blur(7px); transform: translateY(-8px) scale(.94); }
+  to { opacity: 1; filter: blur(0); transform: translateY(0) scale(1); }
+}
+
+.utility-panel-heading {
+  padding: 7px 9px 8px;
+  color: var(--still-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+#still-layer .utility-list-item {
+  width: 100%;
+  display: block;
+  padding: 9px 10px;
+  overflow: hidden;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+#still-layer .utility-list-item:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--still-accent) 13%, transparent); }
+#still-layer .utility-list-item:disabled { opacity: .42; cursor: default; background: transparent; }
+#still-layer .utility-list-item.action { margin-bottom: 5px; border-bottom: 1px solid var(--still-line); border-radius: 11px 11px 6px 6px; }
+#still-layer .utility-list-item.action.active { color: var(--still-accent); }
+.utility-list-item span,
+.utility-list-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.utility-list-item span { font-size: 13px; }
+.utility-list-item small { margin-top: 2px; color: var(--still-muted); font-size: 11px; }
+.utility-panel-empty { padding: 18px 10px; color: var(--still-muted); text-align: center; font-size: 12px; }
+
+.download-item { padding: 10px; border-radius: 12px; }
+.download-item:hover { background: color-mix(in srgb, var(--still-accent) 9%, transparent); }
+.download-title { overflow: hidden; font-size: 13px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.download-meta { margin-top: 3px; color: var(--still-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.download-progress { height: 3px; margin-top: 8px; overflow: hidden; background: color-mix(in srgb, var(--still-muted) 22%, transparent); border-radius: 3px; }
+.download-progress[hidden] { display: none; }
+.download-progress > div { width: 0; height: 100%; background: var(--still-accent); border-radius: inherit; transition: width 180ms ease; }
+.download-progress.indeterminate > div { width: 30%; animation: still-download-indeterminate 1.1s linear infinite; }
+@keyframes still-download-indeterminate { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.download-actions { display: flex; gap: 6px; margin-top: 8px; }
+.download-actions:empty { display: none; }
+#still-layer .download-actions button,
+#still-layer .permission-setting > button {
+  padding: 5px 9px;
+  background: color-mix(in srgb, var(--still-muted) 14%, transparent);
+  border: 1px solid var(--still-line);
+  border-radius: 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#still-layer .download-actions button:hover,
+#still-layer .permission-setting > button:hover { background: color-mix(in srgb, var(--still-accent) 18%, transparent); }
+
+.permission-site-origin {
+  margin: 1px 3px 6px;
+  padding: 8px 10px;
+  overflow: hidden;
+  color: var(--still-muted);
+  background: color-mix(in srgb, var(--still-muted) 8%, transparent);
+  border-radius: 12px;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permission-setting {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 7px 6px 10px;
+  border-radius: 13px;
+}
+
+.permission-setting:hover { background: color-mix(in srgb, var(--still-text) 6%, transparent); }
+.permission-setting-copy { min-width: 0; display: grid; gap: 2px; }
+.permission-setting-copy strong { font-size: 12px; font-weight: 620; }
+.permission-setting-copy small { color: var(--still-muted); font-size: 11px; }
+
+/* ------------------------------------------------------------- tab dock */
+
+#still-tab-dock {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 450px;
+  height: 114px;
+  padding: 12px 18px;
+  background: rgba(246, 246, 247, .824);
+  border: 1px solid rgba(0, 0, 0, .11);
+  border-radius: 38px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .46), 0 11px 52px rgba(0, 0, 0, .42), 0 3px 18px rgba(0, 0, 0, .48);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(.955);
+  transition: opacity 145ms cubic-bezier(.33, 1, .68, 1), transform 205ms cubic-bezier(.165, .84, .44, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  #still-tab-dock {
+    background: rgba(20, 21, 23, .745);
+    border-color: rgba(255, 255, 255, .165);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 11px 52px rgba(0, 0, 0, .42), 0 3px 18px rgba(0, 0, 0, .48);
+  }
+}
+
+#still-tab-dock[hidden] { display: none; }
+#still-tab-dock.visible { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
+#still-tab-dock.closing {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(1.045);
+  transition: opacity 105ms cubic-bezier(.32, 0, .67, 0), transform 115ms cubic-bezier(.32, 0, .67, 0);
+}
+
+#still-tab-dock-icons {
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#still-layer .tab-dock-item {
+  position: relative;
+  width: 78px;
+  height: 86px;
+  flex: 0 0 78px;
+  display: grid;
+  place-items: center;
+  margin: 0 2px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 22px;
+  cursor: pointer;
+  opacity: 0;
+  filter: blur(38px);
+  transform: scale(1.72);
+}
+
+#still-tab-dock.visible .tab-dock-item {
+  animation:
+    still-dock-scale var(--tab-dock-scale-duration, 330ms) cubic-bezier(.165, .84, .44, 1) var(--tab-dock-delay, 0ms) both,
+    still-dock-opacity var(--tab-dock-opacity-duration, 205ms) cubic-bezier(.25, .46, .45, .94) var(--tab-dock-delay, 0ms) both,
+    still-dock-blur var(--tab-dock-blur-duration, 310ms) cubic-bezier(.165, .84, .44, 1) var(--tab-dock-delay, 0ms) both;
+}
+
+@keyframes still-dock-scale { from { transform: scale(1.72); } to { transform: scale(1); } }
+@keyframes still-dock-opacity { from { opacity: 0; } to { opacity: 1; } }
+@keyframes still-dock-blur { from { filter: blur(38px); } to { filter: blur(0); } }
+
+.tab-dock-visual {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  transform: scale(var(--tab-dock-scale, 1));
+  filter: drop-shadow(0 var(--tab-dock-shadow-y, 3px) var(--tab-dock-shadow-blur, 16px) rgba(0, 0, 0, var(--tab-dock-shadow-opacity, 0)));
+  transition: transform 82ms ease-out, filter 82ms ease-out;
+}
+
+#still-layer .tab-dock-favicon { width: 58px; height: 58px; border-radius: 14px; pointer-events: none; }
+#still-layer .tab-dock-favicon.placeholder {
+  font-size: 24px;
+  background: color-mix(in srgb, var(--still-muted) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--still-text) 12%, transparent);
+  border-radius: 14px;
+}
+.tab-dock-empty-icon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, var(--still-muted) 65%, transparent);
+  font: 300 36px/1 "Segoe UI Variable", "Segoe UI", sans-serif;
+  opacity: .62;
+}
+.tab-dock-item.empty .tab-dock-visual { filter: none; }
+
+/* ---------------------------------------------------------------- toast */
+
+#still-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  max-width: min(560px, calc(100vw - 40px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 15px;
+  background: var(--still-pill-strong);
+  border: 1px solid var(--still-line);
+  border-radius: 20px;
+  box-shadow: var(--still-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 10px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+#still-toast.show { opacity: 1; transform: translate(-50%, 0); }
+#still-toast.has-action { pointer-events: auto; }
+#still-toast button[hidden] { display: none; }
+#still-toast button {
+  flex: 0 0 auto;
+  padding: 6px 11px;
+  font-weight: 650;
+  background: color-mix(in srgb, var(--still-text) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--still-text) 22%, transparent);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------- slot replacement */
+
+#still-replacement-backdrop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, .24);
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity 150ms ease;
+}
+
+#still-replacement-backdrop[hidden] { display: none; }
+#still-replacement-backdrop.visible { opacity: 1; }
+
+#still-replacement-modal {
+  width: min(460px, calc(100vw - 44px));
+  padding: 18px;
+  background: color-mix(in srgb, var(--still-pill-strong) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--still-text) 17%, transparent);
+  border-radius: 24px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .46), 0 6px 22px rgba(0, 0, 0, .23);
+  transform: translateY(14px) scale(.965);
+  filter: blur(8px);
+  transition: transform 240ms var(--still-ease), filter 210ms ease;
+}
+
+#still-replacement-backdrop.visible #still-replacement-modal { transform: none; filter: none; }
+
+.replacement-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 2px 4px 12px;
+}
+
+.replacement-heading h2 { margin: 0; font-size: 19px; font-weight: 680; }
+.replacement-heading p { margin: 5px 0 0; color: var(--still-muted); font-size: 12px; }
+
+#still-replacement-cancel {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: color-mix(in srgb, var(--still-muted) 13%, transparent);
+  border: 1px solid var(--still-line);
+  border-radius: 11px;
+  cursor: pointer;
+}
+
+#still-replacement-url {
+  margin: 0 4px 12px;
+  padding: 9px 12px;
+  overflow: hidden;
+  color: var(--still-muted);
+  background: color-mix(in srgb, var(--still-muted) 9%, transparent);
+  border-radius: 13px;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#still-replacement-list { display: grid; gap: 4px; }
+
+#still-layer .replacement-slot {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  text-align: start;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background 130ms ease, border-color 130ms ease;
+}
+
+#still-layer .replacement-slot:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--still-text) 8%, transparent);
+  border-color: color-mix(in srgb, var(--still-text) 11%, transparent);
+}
+
+#still-layer .replacement-favicon { width: 27px; height: 27px; border-radius: 8px; }
+.replacement-copy { min-width: 0; display: grid; gap: 3px; }
+.replacement-copy strong,
+.replacement-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replacement-copy strong { font-size: 12.5px; font-weight: 620; }
+.replacement-copy span { color: var(--still-muted); font-size: 11px; }
+.replacement-action { color: var(--still-muted); font-size: 11px; }
+
+@media (max-width: 920px) {
+  #still-chrome { padding-right: 176px; }
+  #still-chrome .slot { padding: 0 6px 0 8px; gap: 7px; }
+  #still-chrome .top-control { width: 35px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #still-chrome :is(.slot, .top-control),
+  #still-tab-dock,
+  #still-tab-dock.visible .tab-dock-item,
+  :root[still] #tabbrowser-tabpanels,
+  .still-edge-fade,
+  #still-new-slot-edge {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}
+
+/* --------------------------------------------------------------- startup */
+
+#still-splash {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #000;
+  pointer-events: auto;
+  -moz-window-dragging: drag;
+}
+
+.still-mark {
+  position: relative;
+  width: 148px;
+  height: 148px;
+}
+
+.still-mark-bar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* Soft light behind the mark; a gradient, so no filter cost. */
+.still-mark-glow {
+  position: absolute;
+  inset: -90px;
+  opacity: 0;
+  background: radial-gradient(closest-side, rgba(255, 255, 250, .10), rgba(255, 255, 250, .035) 55%, transparent 100%);
+}
+
+:root[still-starting] #still-reveal,
+:root[still-starting] #still-chrome {
+  visibility: hidden;
+}
+
+/* ------------------------------------------------------- address sheet */
+
+#still-chrome .slot.editing {
+  --still-glass-tint: var(--still-pill-strong);
+  border-color: color-mix(in srgb, var(--still-accent) 55%, transparent);
+}
+
+.address-sheet {
+  position: absolute;
+  z-index: 60;
+  overflow: hidden;
+  background: var(--still-pill-strong);
+  border: 1px solid color-mix(in srgb, var(--still-accent) 40%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .18), 0 18px 38px -16px rgba(0, 0, 0, .6);
+  pointer-events: auto;
+  -moz-window-dragging: no-drag;
+  --still-glass-tint: var(--still-pill-strong);
+  animation: still-sheet-in 160ms var(--still-ease) both;
+}
+
+.address-sheet[hidden] { display: none; }
+
+@keyframes still-sheet-in { from { opacity: 0; transform: translateY(-3px); } }
+
+
+/* The slot being edited is the address field. */
+#still-chrome .slot.editing { z-index: 61; cursor: text; }
+#still-chrome .slot.editing .slot-close { visibility: hidden; }
+#still-chrome .slot.editing.open {
+  border-bottom-color: transparent;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.slot-inline { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+
+#still-layer .slot-inline input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0;
+  color: var(--still-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 13px;
+  user-select: text;
+}
+
+.slot-inline input::placeholder { color: var(--still-muted); }
+.slot-inline input::selection { background: color-mix(in srgb, var(--still-accent) 38%, transparent); }
+
+.address-list {
+  display: grid;
+  gap: 1px;
+  padding: 6px;
+}
+
+#still-layer .address-row {
+  min-width: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  animation: still-row-in 140ms var(--still-ease) both;
+}
+
+@keyframes still-row-in { from { opacity: 0; transform: translateY(-2px); } }
+
+#still-layer .address-row.selected,
+#still-layer .address-row:hover { background: color-mix(in srgb, var(--still-accent) 15%, transparent); }
+
+
+
+.address-row .address-icon { flex: 0 0 20px; }
+
+#still-layer .address-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  object-fit: contain;
+}
+
+#still-layer .address-icon.letter,
+#still-layer .address-icon.glyph {
+  display: grid;
+  place-items: center;
+  color: var(--still-muted);
+  background: color-mix(in srgb, var(--still-muted) 16%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+#still-layer .address-icon.glyph { background: transparent; }
+#still-layer .address-icon.glyph svg { width: 17px; height: 17px; }
+
+.address-title,
+.address-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.address-title { flex: 0 1 auto; max-width: 68%; font-size: 13.5px; }
+.address-row small { flex: 1 1 0; color: var(--still-muted); font-size: 12px; }
+.address-row.page small::before { content: "\00b7"; margin-right: 8px; opacity: .7; }
+.address-row:is(.search, .action) .address-title { font-weight: 500; }
+.address-row:is(.search, .action) small { flex: 0 0 auto; margin-left: auto; }
+
+/* -------------------------------------------------------- switch shimmer
+   The current slot has a calm lit fill. Switching sends a band of light
+   across the slots from the old slot to the new one (still-window.js:
+   glideShimmer animates the two values below on the slot row; each slot
+   draws its part of the band, so it lines up even while slots slide in). */
+
+@property --still-shimmer-x {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: -9999px;
+}
+
+@property --still-shimmer-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+#still-chrome .slot-row {
+  --still-shimmer-width: 280px;
+  --still-shimmer-light: 255, 255, 255;
+  --still-shimmer-strength: .3;
+  --still-shimmer-angle: 90deg;
+  --still-shimmer-peak: 0.8;
+  /* Titles: the current slot reads at full strength, the others a step
+     back; the band lifts each title to full as it passes. */
+  --still-title-rest: rgba(238, 240, 238, .66);
+  --still-title-lit: 255, 255, 255;
+}
+
+#still-chrome .slot.active {
+  --still-glass-tint: var(--still-pill-active);
+  border-color: var(--still-pill-active-edge);
+}
+#still-chrome .slot.active:hover { --still-glass-tint: var(--still-pill-active); }
+#still-chrome .slot { transition-property: transform, opacity, background, border-color, box-shadow; }
+#still-chrome .slot.active { transition-duration: 430ms, 210ms, 320ms, 320ms, 170ms; }
+
+#still-chrome .slot:not(.empty)::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(var(--still-shimmer-angle),
+      rgba(var(--still-shimmer-light), 0) 0%,
+      rgba(var(--still-shimmer-light), calc(var(--still-shimmer-strength) * .25 * var(--still-shimmer-alpha))) 45%,
+      rgba(var(--still-shimmer-light), calc(var(--still-shimmer-strength) * var(--still-shimmer-alpha))) 80%,
+      rgba(var(--still-shimmer-light), 0) 100%) no-repeat;
+  background-size: var(--still-shimmer-width) 100%;
+  background-position: calc(var(--still-shimmer-x) - var(--pill-x, 0px) - var(--still-shimmer-width) * var(--still-shimmer-peak)) 0;
+}
+
+/* The text shimmer: like a chat assistant's thinking line, the letters
+   brighten as the band crosses them. */
+#still-chrome .slot:not(.empty) .slot-title {
+  color: transparent;
+  background:
+    linear-gradient(90deg,
+      rgba(var(--still-title-lit), 0) 0,
+      rgba(var(--still-title-lit), var(--still-shimmer-alpha)) 70px,
+      rgba(var(--still-title-lit), 0) 140px) no-repeat,
+    linear-gradient(var(--still-title-base), var(--still-title-base));
+  background-size: 140px 100%, 100% 100%;
+  background-position: calc(var(--still-shimmer-x) - var(--title-x, 0px) - 70px) 0, 0 0;
+  -moz-background-clip: text;
+  background-clip: text;
+  /* Text painted from its background has no ellipsis; long titles fade out
+     at the end instead. */
+  text-overflow: clip;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
+  --still-title-base: var(--still-title-rest);
+  transition: --still-title-base 320ms ease;
+}
+#still-chrome .slot.active .slot-title,
+#still-chrome .slot:hover .slot-title { --still-title-base: var(--still-text); }
+
+@property --still-title-base {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+/* Landing: a short soft light on the new slot's edge. */
+#still-chrome .slot.landed { animation: still-slot-land 520ms cubic-bezier(.2, .7, .2, 1); }
+@keyframes still-slot-land {
+  from { box-shadow: inset 0 0 0 1px rgba(var(--still-shimmer-light), .34), inset 0 0 16px rgba(var(--still-shimmer-light), .09), var(--still-shadow); }
+  to { box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), var(--still-shadow); }
+}
+
+:root[still] {
+  --still-pill-active: rgba(255, 255, 255, 0.99);
+  --still-pill-active-edge: rgba(255, 255, 255, 0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[still] {
+    --still-pill-active: rgba(44, 47, 45, 0.96);
+    --still-pill-active-edge: rgba(255, 255, 255, 0.16);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  #still-chrome .slot-row {
+    --still-shimmer-light: 255, 255, 255;
+    --still-shimmer-strength: .85;
+    --still-title-rest: rgba(37, 38, 37, .62);
+    --still-title-lit: 0, 0, 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #still-chrome .slot:not(.empty)::after { display: none; }
+  #still-chrome .slot.landed { animation: none; }
+}

@@ -1,5 +1,5 @@
 (() => {
-  const UI_VERSION = 31;
+  const UI_VERSION = 32;
   if (window.__stillDownloadUi?.version === UI_VERSION && window.__stillDownloadUi?.mount) {
     window.__stillDownloadUi.mount();
     return;
@@ -19,11 +19,11 @@
   let tooltipHideTimer;
   let cornerHome = null;
   let playerLab = null;
-  let edgeMirrorTimer = 0;
-  let edgeMirrorFrameVideo = null;
-  let edgeMirrorFrameHandle = 0;
-  let edgeMirrorLastState = '';
-  let edgeMirrorLastVideo = null;
+  // Edge fill renderer (WebGL). See startEdgeMirror.
+  let edge = null;
+  let edgeFrame = 0;
+  let edgeVideo = null;
+  let edgeObserver = null;
   const PLAYER_LAB_STORAGE_KEY = 'still-youtube-player-lab-v1';
   const PLAYER_LAB_DEFAULTS = {
     height: 94,
@@ -102,39 +102,6 @@
     controls.softnessValue.textContent = `${playerLabSettings.softness.toFixed(1).replace(/\.0$/, '')} px`;
   }
 
-  function stopEdgeMirror() {
-    if (edgeMirrorTimer) clearTimeout(edgeMirrorTimer);
-    if (edgeMirrorFrameVideo && edgeMirrorFrameHandle) {
-      try { edgeMirrorFrameVideo.cancelVideoFrameCallback(edgeMirrorFrameHandle); } catch {}
-    }
-    edgeMirrorTimer = 0;
-    edgeMirrorFrameVideo = null;
-    edgeMirrorFrameHandle = 0;
-    edgeMirrorLastState = '';
-    edgeMirrorLastVideo = null;
-    document.querySelector('#still-youtube-edge-mirror')?.remove();
-  }
-
-  function ensureEdgeMirrorCanvas(player) {
-    let canvas = player.querySelector(':scope > #still-youtube-edge-mirror');
-    if (canvas) return canvas;
-    canvas = document.createElement('canvas');
-    canvas.id = 'still-youtube-edge-mirror';
-    canvas.setAttribute('aria-hidden', 'true');
-    canvas.style.cssText = [
-      'position:absolute',
-      'inset:0',
-      'width:100%',
-      'height:100%',
-      'pointer-events:none',
-      'z-index:1',
-      'background:transparent',
-      'contain:strict'
-    ].join(';');
-    player.prepend(canvas);
-    return canvas;
-  }
-
   function fadeAmount(distance) {
     const t = Math.max(0, Math.min(1, distance));
     switch (playerLabSettings.fadeCurve) {
@@ -145,17 +112,6 @@
     }
   }
 
-  function fillEdgeFade(context, x0, y0, x1, y1, rect, outerAtStart) {
-    if (rect.width < 0.5 || rect.height < 0.5) return;
-    const gradient = context.createLinearGradient(x0, y0, x1, y1);
-    for (let step = 0; step <= 32; step += 1) {
-      const position = step / 32;
-      const distance = outerAtStart ? 1 - position : position;
-      gradient.addColorStop(position, `rgba(0,0,0,${fadeAmount(distance).toFixed(4)})`);
-    }
-    context.fillStyle = gradient;
-    context.fillRect(rect.x, rect.y, rect.width, rect.height);
-  }
 
   function fitVideoToStage(player, video) {
     if (player.classList.contains('ytp-fullscreen') || document.fullscreenElement
@@ -177,6 +133,7 @@
       if (video.style.getPropertyValue(name) !== value) video.style.setProperty(name, value);
     }
   }
+
 
   function displayedVideoRect(video) {
     const elementRect = video.getBoundingClientRect();
@@ -202,212 +159,260 @@
     };
   }
 
-  function paintEdgeMirror(frame = null) {
-    if (!isWatchPage() || document.hidden) return;
-    const player = document.querySelector('#movie_player');
-    const video = player?.querySelector('video.html5-main-video, video');
-    if (!player || !video || !video.videoWidth || !video.videoHeight || video.readyState < 2) return;
-    fitVideoToStage(player, video);
-    if (video !== edgeMirrorLastVideo) {
-      edgeMirrorLastVideo = video;
-      edgeMirrorLastState = '';
+
+  // Edge fill. The video's own frame is drawn into the gutters around it
+  // (mirrored, or zoomed to cover) with WebGL. WebGL takes the decoded frame
+  // straight from the GPU; a 2D canvas or -moz-element copies every frame
+  // through the CPU, which in Firefox costs 10 ms or more per copy and froze
+  // the page at 1080p. Drawing happens in requestAnimationFrame while the
+  // video plays, so each refresh shows the frame the compositor shows.
+  const EDGE_VERTEX = `#version 300 es
+in vec2 point;
+void main() { gl_Position = vec4(point, 0.0, 1.0); }`;
+  const EDGE_FRAGMENT = `#version 300 es
+precision highp float;
+uniform sampler2D frame;
+uniform vec2 size;      // canvas size in CSS pixels
+uniform float scale;    // backing pixels per CSS pixel
+uniform vec4 box;       // picture rectangle in CSS pixels: x, y, width, height
+uniform vec4 cover;     // zoom mode: uv offset and uv scale
+uniform float zoom;     // 1 = zoomed cover, 0 = mirrored
+uniform float gain;     // strength times brightness
+uniform float muted;
+uniform float fade;
+uniform float curve;    // 0 soft, 1 late, 2 linear, 3 early
+out vec4 color;
+
+float fadeAmount(float t) {
+  t = clamp(t, 0.0, 1.0);
+  if (curve < 0.5) return t * t;
+  if (curve < 1.5) return t * t * t * t;
+  if (curve < 2.5) return t;
+  return sqrt(t);
+}
+
+void main() {
+  vec2 px = vec2(gl_FragCoord.x, size.y * scale - gl_FragCoord.y) / scale;
+  vec2 v = (px - box.xy) / box.zw;
+  bool inside = v.x >= 0.0 && v.x <= 1.0 && v.y >= 0.0 && v.y <= 1.0;
+  vec2 uv;
+  if (inside) uv = v;
+  else if (zoom > 0.5) uv = cover.xy + px / size * cover.zw;
+  else uv = 1.0 - abs(1.0 - mod(abs(v), 2.0));
+  vec3 rgb = texture(frame, clamp(uv, 0.0, 1.0)).rgb;
+  if (!inside) {
+    if (muted > 0.5) {
+      float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+      rgb = mix(vec3(luma), rgb, 0.28);
+      rgb = ((rgb - 0.5) * 1.04 + 0.5) * 0.97;
     }
-    const canvas = ensureEdgeMirrorCanvas(player);
+    rgb *= gain;
+    if (fade > 0.5) {
+      // 0 at the picture's edge, 1 at the player's outer edge.
+      float dx = px.x < box.x ? (box.x - px.x) / max(box.x, 1.0)
+        : px.x > box.x + box.z ? (px.x - box.x - box.z) / max(size.x - box.x - box.z, 1.0) : 0.0;
+      float dy = px.y < box.y ? (box.y - px.y) / max(box.y, 1.0)
+        : px.y > box.y + box.w ? (px.y - box.y - box.w) / max(size.y - box.y - box.w, 1.0) : 0.0;
+      rgb *= 1.0 - fadeAmount(max(dx, dy));
+    }
+  }
+  color = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+}`;
+
+  function createEdgeRenderer(player) {
+    const canvas = document.createElement('canvas');
+    canvas.id = 'still-youtube-edge-mirror';
+    canvas.setAttribute('aria-hidden', 'true');
+    // Below YouTube's video container (z-index 10), so the picture itself
+    // always comes from the real video element.
+    canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;contain:strict;display:none';
+    const gl = canvas.getContext('webgl2', {
+      alpha: false, antialias: false, depth: false, stencil: false,
+      premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'
+    });
+    if (!gl) return null;
+    const shader = (type, source) => {
+      const result = gl.createShader(type);
+      gl.shaderSource(result, source);
+      gl.compileShader(result);
+      if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(result) || 'shader');
+      return result;
+    };
+    const program = gl.createProgram();
+    gl.attachShader(program, shader(gl.VERTEX_SHADER, EDGE_VERTEX));
+    gl.attachShader(program, shader(gl.FRAGMENT_SHADER, EDGE_FRAGMENT));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program');
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const point = gl.getAttribLocation(program, 'point');
+    gl.enableVertexAttribArray(point);
+    gl.vertexAttribPointer(point, 2, gl.FLOAT, false, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const uniforms = {};
+    for (const name of ['size', 'scale', 'box', 'cover', 'zoom', 'gain', 'muted', 'fade', 'curve']) {
+      uniforms[name] = gl.getUniformLocation(program, name);
+    }
+    const renderer = { canvas, gl, uniforms, player, geometry: null, broken: false };
+    canvas.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault();
+      if (edge === renderer) stopEdgeMirror();
+    });
+    player.prepend(canvas);
+    return renderer;
+  }
+
+  function currentVideo() {
+    return document.querySelector('#movie_player video.html5-main-video, #movie_player video');
+  }
+
+  function edgeWanted() {
+    return isWatchPage() && !document.hidden && playerLabSettings.mirror && playerLabSettings.strength > 0;
+  }
+
+  // Layout work happens here, only when something changed, never per frame.
+  function measureEdge() {
+    if (!edge) return false;
+    const { player, canvas, gl, uniforms } = edge;
+    const video = edgeVideo;
+    if (!video?.videoWidth || !video.videoHeight) { edge.geometry = null; return false; }
+    fitVideoToStage(player, video);
     const width = player.clientWidth;
     const height = player.clientHeight;
-    if (width < 2 || height < 2) return;
-
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, playerLabSettings.softness ? 1 : 1.5);
-    const bitmapWidth = Math.max(1, Math.round(width * pixelRatio));
-    const bitmapHeight = Math.max(1, Math.round(height * pixelRatio));
+    const playerRect = player.getBoundingClientRect();
+    const picture = displayedVideoRect(video);
+    const left = Math.max(0, Math.min(width, picture.left - playerRect.left));
+    const top = Math.max(0, Math.min(height, picture.top - playerRect.top));
+    const right = Math.max(left, Math.min(width, picture.right - playerRect.left));
+    const bottom = Math.max(top, Math.min(height, picture.bottom - playerRect.top));
+    const gutters = Math.max(left, top, width - right, height - bottom);
+    if (width < 2 || height < 2 || right - left < 1 || bottom - top < 1 || gutters < 0.5) {
+      edge.geometry = null;
+      canvas.style.display = 'none';
+      return false;
+    }
+    const zoom = playerLabSettings.edgeFill === 'zoom';
+    const blur = zoom ? Math.max(12, playerLabSettings.softness) : playerLabSettings.softness;
+    // A blurred fill does not need full resolution.
+    const scale = blur >= 4 ? 0.5 : Math.min(window.devicePixelRatio || 1, 2);
+    const bitmapWidth = Math.max(1, Math.round(width * scale));
+    const bitmapHeight = Math.max(1, Math.round(height * scale));
     if (canvas.width !== bitmapWidth || canvas.height !== bitmapHeight) {
       canvas.width = bitmapWidth;
       canvas.height = bitmapHeight;
     }
-    const context = canvas.getContext('2d', { alpha: true });
-    if (!context) return;
-    const playerRect = player.getBoundingClientRect();
-    const videoRect = displayedVideoRect(video);
-    const left = Math.max(0, Math.min(width, videoRect.left - playerRect.left));
-    const top = Math.max(0, Math.min(height, videoRect.top - playerRect.top));
-    const right = Math.max(left, Math.min(width, videoRect.right - playerRect.left));
-    const bottom = Math.max(top, Math.min(height, videoRect.bottom - playerRect.top));
-    const contentWidth = right - left;
-    const contentHeight = bottom - top;
-    const renderState = [
-      frame?.presentedFrames ?? video.currentTime.toFixed(3), width, height, bitmapWidth, bitmapHeight,
-      video.videoWidth, video.videoHeight, left.toFixed(2), top.toFixed(2),
-      right.toFixed(2), bottom.toFixed(2),
-      playerLabSettings.mirror, playerLabSettings.edgeFill, playerLabSettings.strength,
-      playerLabSettings.brightness, playerLabSettings.fade, playerLabSettings.fadeCurve,
-      playerLabSettings.softness, mutedColors
-    ].join('|');
-    if (renderState === edgeMirrorLastState) return;
-    edgeMirrorLastState = renderState;
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    context.globalAlpha = 1;
-    context.filter = 'none';
-    context.clearRect(0, 0, width, height);
-    if (!playerLabSettings.mirror || playerLabSettings.strength <= 0) return;
-
-    if (contentWidth < 1 || contentHeight < 1) return;
-    const leftGap = left;
-    const rightGap = width - right;
-    const topGap = top;
-    const bottomGap = height - bottom;
-    if (Math.max(leftGap, rightGap, topGap, bottomGap) < 0.5) return;
-
-    const leftSourceWidth = Math.min(video.videoWidth / 2, leftGap * video.videoWidth / contentWidth);
-    const rightSourceWidth = Math.min(video.videoWidth / 2, rightGap * video.videoWidth / contentWidth);
-    const topSourceHeight = Math.min(video.videoHeight / 2, topGap * video.videoHeight / contentHeight);
-    const bottomSourceHeight = Math.min(video.videoHeight / 2, bottomGap * video.videoHeight / contentHeight);
-    const toneParts = [`brightness(${playerLabSettings.brightness / 100})`];
-    if (mutedColors) toneParts.push('saturate(.28)', 'contrast(1.04)', 'brightness(.97)');
-    const toneFilter = toneParts.join(' ');
-    const mirrorFilter = playerLabSettings.softness > 0
-      ? `blur(${playerLabSettings.softness}px) ${toneFilter}` : toneFilter;
-    const coverBlur = playerLabSettings.edgeFill === 'zoom'
-      ? playerLabSettings.softness : Math.max(12, playerLabSettings.softness);
-    const coverFilter = coverBlur > 0 ? `blur(${coverBlur}px) ${toneFilter}` : toneFilter;
-
-    try {
-      // A proportional cover pass fills every gutter without stretching.
-      // Mirror mode overlays edge slices; Zoom mode leaves this full frame.
-      const padding = Math.max(36, Math.ceil(playerLabSettings.softness * 4));
-      const coverWidth = width + padding * 2;
-      const coverHeight = height + padding * 2;
-      const coverRatio = coverWidth / coverHeight;
-      let sourceWidth = video.videoWidth;
-      let sourceHeight = video.videoHeight;
-      if (sourceWidth / sourceHeight > coverRatio) sourceWidth = sourceHeight * coverRatio;
-      else sourceHeight = sourceWidth / coverRatio;
-      const sourceX = (video.videoWidth - sourceWidth) / 2;
-      const sourceY = (video.videoHeight - sourceHeight) / 2;
-      context.save();
-      context.beginPath();
-      context.rect(0, 0, width, height);
-      context.rect(left + .5, top + .5, Math.max(0, contentWidth - 1), Math.max(0, contentHeight - 1));
-      context.clip('evenodd');
-      context.globalAlpha = playerLabSettings.strength / 100;
-      context.filter = coverFilter;
-      context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight,
-        -padding, -padding, coverWidth, coverHeight);
-      context.restore();
-
-      if (playerLabSettings.edgeFill === 'mirror' && leftGap >= 0.5 && leftSourceWidth > 0) {
-        context.save();
-        context.beginPath();
-        context.rect(0, top, Math.ceil(leftGap), contentHeight);
-        context.clip();
-        context.globalAlpha = playerLabSettings.strength / 100;
-        context.filter = mirrorFilter;
-        context.translate(left * 2, 0);
-        context.scale(-1, 1);
-        context.drawImage(
-          video,
-          0, 0, leftSourceWidth, video.videoHeight,
-          left, top, leftGap, contentHeight
-        );
-        context.restore();
-      }
-      if (playerLabSettings.edgeFill === 'mirror' && rightGap >= 0.5 && rightSourceWidth > 0) {
-        context.save();
-        context.beginPath();
-        context.rect(Math.floor(right), top, Math.ceil(rightGap), contentHeight);
-        context.clip();
-        context.globalAlpha = playerLabSettings.strength / 100;
-        context.filter = mirrorFilter;
-        context.translate(right * 2, 0);
-        context.scale(-1, 1);
-        context.drawImage(
-          video,
-          video.videoWidth - rightSourceWidth, 0, rightSourceWidth, video.videoHeight,
-          right - rightGap, top, rightGap, contentHeight
-        );
-        context.restore();
-      }
-      if (playerLabSettings.edgeFill === 'mirror' && topGap >= 0.5 && topSourceHeight > 0) {
-        context.save();
-        context.beginPath();
-        context.rect(left, 0, contentWidth, Math.ceil(topGap));
-        context.clip();
-        context.globalAlpha = playerLabSettings.strength / 100;
-        context.filter = mirrorFilter;
-        context.translate(0, top * 2);
-        context.scale(1, -1);
-        context.drawImage(video, 0, 0, video.videoWidth, topSourceHeight,
-          left, top, contentWidth, topGap);
-        context.restore();
-      }
-      if (playerLabSettings.edgeFill === 'mirror' && bottomGap >= 0.5 && bottomSourceHeight > 0) {
-        context.save();
-        context.beginPath();
-        context.rect(left, Math.floor(bottom), contentWidth, Math.ceil(bottomGap));
-        context.clip();
-        context.globalAlpha = playerLabSettings.strength / 100;
-        context.filter = mirrorFilter;
-        context.translate(0, bottom * 2);
-        context.scale(1, -1);
-        context.drawImage(video, 0, video.videoHeight - bottomSourceHeight,
-          video.videoWidth, bottomSourceHeight,
-          left, bottom - bottomGap, contentWidth, bottomGap);
-        context.restore();
-      }
-      if (playerLabSettings.fade) {
-        context.save();
-        context.globalAlpha = 1;
-        context.filter = 'none';
-        fillEdgeFade(context, 0, 0, left, 0,
-          { x: 0, y: 0, width: leftGap, height }, true);
-        fillEdgeFade(context, right, 0, width, 0,
-          { x: right, y: 0, width: rightGap, height }, false);
-        fillEdgeFade(context, 0, 0, 0, top,
-          { x: left, y: 0, width: contentWidth, height: topGap }, true);
-        fillEdgeFade(context, 0, bottom, 0, height,
-          { x: left, y: bottom, width: contentWidth, height: bottomGap }, false);
-        context.restore();
-      }
-    } catch {
-      // A protected stream can reject canvas drawing. Keep its gutters OLED black.
-    }
+    const filter = blur > 0 ? `blur(${blur}px)` : 'none';
+    if (canvas.style.filter !== filter) canvas.style.filter = filter;
+    canvas.style.display = '';
+    // Zoom mode: the video scaled to cover the whole player, centred.
+    const videoRatio = video.videoWidth / video.videoHeight;
+    const playerRatio = width / height;
+    const coverWidth = playerRatio > videoRatio ? 1 : playerRatio / videoRatio;
+    const coverHeight = playerRatio > videoRatio ? videoRatio / playerRatio : 1;
+    gl.viewport(0, 0, bitmapWidth, bitmapHeight);
+    gl.uniform2f(uniforms.size, width, height);
+    gl.uniform1f(uniforms.scale, bitmapWidth / width);
+    gl.uniform4f(uniforms.box, left, top, right - left, bottom - top);
+    gl.uniform4f(uniforms.cover, (1 - coverWidth) / 2, (1 - coverHeight) / 2, coverWidth, coverHeight);
+    gl.uniform1f(uniforms.zoom, zoom ? 1 : 0);
+    gl.uniform1f(uniforms.gain, (playerLabSettings.strength / 100) * (playerLabSettings.brightness / 100));
+    gl.uniform1f(uniforms.muted, mutedColors ? 1 : 0);
+    gl.uniform1f(uniforms.fade, playerLabSettings.fade ? 1 : 0);
+    gl.uniform1f(uniforms.curve, ['soft', 'late', 'linear', 'early'].indexOf(playerLabSettings.fadeCurve));
+    edge.geometry = { width, height };
+    return true;
   }
 
-  function scheduleEdgeMirror() {
-    if (!isWatchPage()) return;
-    const video = document.querySelector('#movie_player video.html5-main-video, #movie_player video');
-    if (!document.hidden && video?.requestVideoFrameCallback) {
-      edgeMirrorFrameVideo = video;
-      edgeMirrorFrameHandle = video.requestVideoFrameCallback((_now, frame) => {
-        edgeMirrorFrameHandle = 0;
-        edgeMirrorFrameVideo = null;
-        paintEdgeMirror(frame);
-        scheduleEdgeMirror();
-      });
+  function drawEdge() {
+    if (!edge?.geometry || edge.broken || !edgeVideo || edgeVideo.readyState < 2) return false;
+    const { gl } = edge;
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, edgeVideo);
+    } catch {
+      // A protected stream refuses to be read. Its gutters stay black.
+      edge.broken = true;
+      edge.canvas.style.display = 'none';
+      return false;
+    }
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    return true;
+  }
+
+  function edgeTick() {
+    edgeFrame = 0;
+    if (!edge || !edgeWanted()) return;
+    drawEdge();
+    if (edgeVideo && !edgeVideo.paused && !edgeVideo.ended) edgeFrame = requestAnimationFrame(edgeTick);
+  }
+
+  // Paused: draw once now and once more when the next frame is presented
+  // (after a seek the new frame arrives a little later).
+  function drawEdgeOnce() {
+    if (edgeFrame) return;
+    drawEdge();
+    try { edgeVideo?.requestVideoFrameCallback?.(() => { if (!edgeFrame) drawEdge(); }); } catch {}
+  }
+
+  function onEdgeVideoEvent(event) {
+    if (!edge) return;
+    if (event.type === 'resize' || event.type === 'loadeddata') measureEdge();
+    if (!edgeVideo.paused && !edgeFrame) edgeFrame = requestAnimationFrame(edgeTick);
+    else drawEdgeOnce();
+  }
+
+  const EDGE_EVENTS = ['play', 'playing', 'pause', 'seeked', 'loadeddata', 'resize', 'emptied'];
+
+  function watchEdgeVideo(video) {
+    if (edgeVideo === video) return;
+    if (edgeVideo) EDGE_EVENTS.forEach((name) => edgeVideo.removeEventListener(name, onEdgeVideoEvent));
+    edgeVideo = video;
+    if (video) EDGE_EVENTS.forEach((name) => video.addEventListener(name, onEdgeVideoEvent));
+  }
+
+  function stopEdgeMirror() {
+    if (edgeFrame) cancelAnimationFrame(edgeFrame);
+    edgeFrame = 0;
+    watchEdgeVideo(null);
+    edgeObserver?.disconnect();
+    edgeObserver = null;
+    if (edge) {
+      try { edge.gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch {}
+      edge.canvas.remove();
+    }
+    edge = null;
+    document.querySelector('#still-youtube-edge-mirror')?.remove();
+  }
+
+  function startEdgeMirror() {
+    if (!edgeWanted()) {
+      if (edgeFrame) cancelAnimationFrame(edgeFrame);
+      edgeFrame = 0;
+      if (edge) edge.canvas.style.display = 'none';
+      if (!isWatchPage() || !playerLabSettings.mirror) stopEdgeMirror();
       return;
     }
-    edgeMirrorTimer = setTimeout(() => {
-      edgeMirrorTimer = 0;
-      paintEdgeMirror();
-      scheduleEdgeMirror();
-    }, document.hidden ? 500 : 16);
-  }
-
-  function startEdgeMirror(immediate = false) {
-    if (edgeMirrorFrameVideo
-      && edgeMirrorFrameVideo !== document.querySelector('#movie_player video.html5-main-video, #movie_player video')) {
-      immediate = true;
+    const player = document.querySelector('#movie_player');
+    const video = currentVideo();
+    if (!player || !video) return;
+    if (edge && (edge.player !== player || !edge.canvas.isConnected)) stopEdgeMirror();
+    if (!edge) {
+      try { edge = createEdgeRenderer(player); } catch { edge = null; }
+      if (!edge) return;
+      edgeObserver = new ResizeObserver(() => { if (measureEdge()) drawEdgeOnce(); });
+      edgeObserver.observe(player);
     }
-    if (immediate) {
-      if (edgeMirrorTimer) clearTimeout(edgeMirrorTimer);
-      if (edgeMirrorFrameVideo && edgeMirrorFrameHandle) {
-        try { edgeMirrorFrameVideo.cancelVideoFrameCallback(edgeMirrorFrameHandle); } catch {}
-      }
-      edgeMirrorTimer = 0;
-      edgeMirrorFrameVideo = null;
-      edgeMirrorFrameHandle = 0;
-      paintEdgeMirror();
+    watchEdgeVideo(video);
+    if (!measureEdge()) return;
+    if (!video.paused && !video.ended) {
+      if (!edgeFrame) edgeFrame = requestAnimationFrame(edgeTick);
+    } else {
+      drawEdgeOnce();
     }
-    if (!edgeMirrorTimer && !edgeMirrorFrameHandle) scheduleEdgeMirror();
   }
 
   function positionPlayerLabPanel() {
@@ -623,8 +628,7 @@
       playerLabSettings[key] = value;
       savePlayerLabSettings();
       applyPlayerLabSettings();
-      edgeMirrorLastState = '';
-      startEdgeMirror(true);
+      startEdgeMirror();
     }
     controls.height.addEventListener('input', () => updateSetting('height', Number(controls.height.value)));
     controls.mirror.addEventListener('change', () => updateSetting('mirror', controls.mirror.checked));
@@ -649,8 +653,7 @@
       savePlayerLabSettings();
       applyPlayerLabSettings();
       applyMutedColors();
-      edgeMirrorLastState = '';
-      startEdgeMirror(true);
+      startEdgeMirror();
     });
     panelRoot.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
@@ -765,8 +768,7 @@
     ensureVideoColorStyle();
     document.documentElement.classList.toggle('still-youtube-muted-colors', mutedColors);
     if (playerLab) playerLab.controls.mutedColors.checked = mutedColors;
-    edgeMirrorLastState = '';
-    startEdgeMirror(true);
+    startEdgeMirror();
   }
 
   function toggleMutedColors() {
@@ -1250,13 +1252,28 @@
   window.addEventListener('resize', positionCurrentPanel);
   window.addEventListener('resize', positionCurrentTooltip);
   window.addEventListener('resize', positionPlayerLabPanel);
-  window.addEventListener('resize', () => startEdgeMirror(true));
-  document.addEventListener('fullscreenchange', () => startEdgeMirror(true));
-  document.addEventListener('visibilitychange', () => startEdgeMirror(true));
+  window.addEventListener('resize', () => startEdgeMirror());
+  document.addEventListener('fullscreenchange', () => startEdgeMirror());
+  document.addEventListener('visibilitychange', () => startEdgeMirror());
   window.addEventListener('scroll', positionCurrentPanel, true);
   window.addEventListener('scroll', positionCurrentTooltip, true);
   window.addEventListener('scroll', positionPlayerLabPanel, true);
+  // A playlist or live chat keeps the side column; recommendations never do.
+  let sidePanelFrame = 0;
+  function updateSidePanel() {
+    sidePanelFrame = 0;
+    const secondary = isWatchPage() && document.querySelector('ytd-watch-flexy #secondary');
+    const playlist = secondary?.querySelector('ytd-playlist-panel-renderer:not([hidden]) #items > *');
+    const chat = secondary?.querySelector('ytd-live-chat-frame:not([hidden])');
+    document.documentElement.classList.toggle('still-youtube-side-panel', Boolean(playlist || chat));
+  }
+  // YouTube's fullscreen grid of more videos opens on scroll. Keep the wheel
+  // away from the player in fullscreen so it never slides up.
+  document.addEventListener('wheel', (event) => {
+    if (document.fullscreenElement && event.target?.closest?.('#movie_player')) event.stopImmediatePropagation();
+  }, { capture: true, passive: true });
   mountObserver = new MutationObserver(() => {
+    if (!sidePanelFrame) sidePanelFrame = requestAnimationFrame(updateSidePanel);
     if (!isWatchPage()) return;
     const placement = findActionPlacement();
     if (!currentUi?.host?.isConnected

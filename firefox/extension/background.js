@@ -1,10 +1,44 @@
 const CATALOG_URL = browser.runtime.getURL('channel-catalog.json');
 const YOUTUBE_URL = /^https?:\/\/(?:www\.|m\.)?youtube\.com\//i;
 const YOUTUBE_FILES = ['youtube-filter.js', 'youtube-home.js', 'youtube-ui.js'];
-const FEED_LIFETIME_MS = 60_000;
+// Channel feeds change slowly. They are kept across restarts, shown at once,
+// and refreshed in the background only from the YouTube home page.
+const FEED_LIFETIME_MS = 15 * 60_000;
+const FETCH_LIMIT = 6;
 const feedCache = new Map();
 const avatarCache = new Map();
 let catalogPromise;
+let cacheSave = 0;
+const cacheReady = browser.storage.local.get(['feedCache', 'avatarCache']).then(({ feedCache: feeds, avatarCache: avatars }) => {
+  for (const [id, entry] of Object.entries(feeds || {})) feedCache.set(id, entry);
+  for (const [id, entry] of Object.entries(avatars || {})) avatarCache.set(id, entry);
+}).catch(() => {});
+
+function saveCaches() {
+  clearTimeout(cacheSave);
+  cacheSave = setTimeout(() => {
+    browser.storage.local.set({
+      feedCache: Object.fromEntries(feedCache),
+      avatarCache: Object.fromEntries([...avatarCache].filter(([, entry]) => entry.url))
+    }).catch(() => {});
+  }, 2000);
+}
+
+// At most FETCH_LIMIT requests at a time, so a refresh never floods the
+// network or the CPU.
+async function limited(items, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const index = next++;
+      try { results[index] = { status: 'fulfilled', value: await work(items[index]) }; }
+      catch (reason) { results[index] = { status: 'rejected', reason }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(FETCH_LIMIT, items.length) }, run));
+  return results;
+}
 
 function catalog() {
   catalogPromise ||= fetch(CATALOG_URL).then((response) => response.json());
@@ -59,6 +93,7 @@ async function avatarForChannel(channel) {
     if (response.ok) url = channelAvatarFromHtml(await response.text());
   } catch {}
   avatarCache.set(channel.id, { time: Date.now(), url });
+  saveCaches();
   return url;
 }
 
@@ -94,6 +129,7 @@ async function videosForChannel(channel) {
   const avatar = await avatarPromise.catch(() => '');
   const finished = avatar ? videos.map((video) => ({ ...video, avatar })) : videos;
   feedCache.set(channel.id, { time: Date.now(), videos: finished });
+  saveCaches();
   return finished;
 }
 
@@ -110,8 +146,27 @@ function rotateVideos(videos, channels) {
   return mixed.slice(0, 180);
 }
 
+// What is cached right now, without any network request.
+function cachedFeed(channels) {
+  const videos = [];
+  let missing = 0;
+  for (const channel of channels) {
+    const entry = feedCache.get(channel.id);
+    if (entry) videos.push(...entry.videos);
+    else missing++;
+  }
+  return { videos: rotateVideos(videos, channels), failed: [], loading: missing === channels.length && channels.length > 0 };
+}
+
+function feedStale(channels) {
+  return channels.some((channel) => {
+    const entry = feedCache.get(channel.id);
+    return !entry || Date.now() - entry.time >= FEED_LIFETIME_MS;
+  });
+}
+
 async function feedFor(channels) {
-  const settled = await Promise.allSettled(channels.map(videosForChannel));
+  const settled = await limited(channels, videosForChannel);
   const videos = [];
   const failed = [];
   settled.forEach((result, index) => {
@@ -141,20 +196,32 @@ async function inject(tabId, config) {
   }
 }
 
+const refreshing = new Map();
+
 async function refreshTab(tabId, url) {
   if (!YOUTUBE_URL.test(url || '')) return;
+  await cacheReady;
   const { source, learning } = await currentChannels();
   const base = {
     enabled: learning.map(({ id, name }) => ({ id, name })),
     musicChannels: source.musicChannels.map(({ id, name }) => ({ id, name })),
-    learnPageUrl: browser.runtime.getURL('manage.html'),
-    homeFeed: { videos: [], failed: [], loading: true },
-    musicHomeFeed: { videos: [], failed: [], loading: true }
+    learnPageUrl: browser.runtime.getURL('manage.html')
   };
-  try { await inject(tabId, base); } catch { return; }
-  const [homeFeed, musicHomeFeed] = await Promise.all([
-    feedFor(learning), feedFor(source.musicChannels)
-  ]);
+  // Show what is cached immediately.
+  try {
+    await inject(tabId, { ...base, homeFeed: cachedFeed(learning), musicHomeFeed: cachedFeed(source.musicChannels) });
+  } catch { return; }
+  // Only the home page shows these feeds, so only it refreshes them.
+  let path = '';
+  try { path = new URL(url).pathname; } catch {}
+  if (path !== '/') return;
+  const channels = [...learning, ...source.musicChannels];
+  if (!feedStale(channels)) return;
+  if (!refreshing.has('all')) {
+    refreshing.set('all', Promise.all([feedFor(learning), feedFor(source.musicChannels)])
+      .finally(() => refreshing.delete('all')));
+  }
+  const [homeFeed, musicHomeFeed] = await refreshing.get('all');
   try { await inject(tabId, { ...base, homeFeed, musicHomeFeed }); } catch {}
 }
 
@@ -174,5 +241,8 @@ browser.action.onClicked.addListener(() => browser.runtime.openOptionsPage());
 browser.runtime.onMessage.addListener((message) => {
   if (message?.type === 'open-manager') return browser.runtime.openOptionsPage();
   if (message?.type === 'get-catalog') return currentChannels();
+  if (message?.type === 'history-search' && typeof message.text === 'string') {
+    return browser.history.search({ text: message.text.slice(0, 200), startTime: 0, maxResults: 60 });
+  }
   return undefined;
 });

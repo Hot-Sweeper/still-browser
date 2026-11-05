@@ -4,11 +4,14 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const root = path.join(__dirname, '..');
-const commit = '9fea41204fdfa7a5cfa15b0ebd12904c520478ce';
+// The pinned SearXNG source lives in searxng-pin.json; `npm run searxng:update`
+// moves the pin to the newest upstream commit (with its checksum).
+const pin = JSON.parse(fs.readFileSync(path.join(__dirname, 'searxng-pin.json'), 'utf8'));
+const commit = pin.commit;
 const shortCommit = commit.slice(0, 9);
-const version = `2026.8.22+${shortCommit}`;
+const version = `${pin.date}+${shortCommit}`;
 const recipe = 5;
-const sourceSha256 = '4065d39a15d33f717c002d7196d39694902943f95f75f6970d78365856cd5cf7';
+const sourceSha256 = pin.sourceSha256;
 const sourceUrl = `https://github.com/searxng/searxng/archive/${commit}.tar.gz`;
 const output = path.join(root, 'build', 'searxng-sidecar');
 const work = path.join(root, 'build', 'searxng-work');
@@ -80,7 +83,9 @@ async function main() {
   await downloadVerifiedSource(archivePath);
 
   const archiveRoot = `searxng-${commit}`;
-  run('tar', [
+  // Windows' own tar: Git Bash's GNU tar reads "D:\..." as a remote host.
+  const systemTar = process.platform === 'win32' && path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'tar.exe');
+  run(systemTar && fs.existsSync(systemTar) ? systemTar : 'tar', [
     '-xzf', archivePath,
     '-C', sourcePath,
     '--strip-components=1',

@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 23;
+  const VERSION = 24;
   const existing = window.__stillYouTubeHome;
   if (existing?.version === VERSION) {
     existing.update(window.__stillLearningFilterConfig || {});
@@ -37,6 +37,11 @@
   let lastHomeLoadRequest = 0;
   let nativeDataUrl = location.href;
   let subscriptionVideos = [];
+  let historyVideos = [];
+  let historyState = 'idle';
+  let historyUpdatedAt = 0;
+  // Cards are reused between renders so thumbnails never reload or flash.
+  const cardCache = new Map();
   let subscriptionState = 'idle';
   let subscriptionUpdatedAt = 0;
   let musicHistoryChannels = new Map();
@@ -47,7 +52,7 @@
   try { mutedColors = localStorage.getItem('still-youtube-muted-colors') === 'true'; } catch {}
   try {
     const storedMode = localStorage.getItem('still-youtube-feed-mode');
-    if (['normal', 'selective', 'music', 'subscriptions'].includes(storedMode)) feedMode = storedMode;
+    if (['normal', 'selective', 'music', 'subscriptions', 'history'].includes(storedMode)) feedMode = storedMode;
   } catch {}
   if (window.ytInitialData) pageDataCache.set(location.href, window.ytInitialData);
 
@@ -344,6 +349,7 @@
       avatar,
       meta: cleanVideoMeta(value?.meta, channel),
       duration: cleanText(value?.duration, 24),
+      progress: Math.max(0, Math.min(100, Number(value?.progress) || 0)),
       source
     };
   }
@@ -453,6 +459,9 @@
     const meta = [textValue(renderer?.viewCountText), textValue(renderer?.publishedTimeText)].filter(Boolean).join(' · ');
     const duration = textValue(renderer?.lengthText)
       || textValue(renderer?.thumbnailOverlays?.find((overlay) => overlay?.thumbnailOverlayTimeStatusRenderer)?.thumbnailOverlayTimeStatusRenderer?.text);
+    const progress = renderer?.thumbnailOverlays
+      ?.find((overlay) => overlay?.thumbnailOverlayResumePlaybackRenderer)
+      ?.thumbnailOverlayResumePlaybackRenderer?.percentDurationWatched;
     return safeVideo({
       id,
       title,
@@ -463,7 +472,8 @@
       thumbnail,
       url: new URL(target || `/watch?v=${id}`, location.origin).href,
       meta,
-      duration
+      duration,
+      progress
     }, fallbackChannel ? 'channel' : 'search');
   }
 
@@ -477,8 +487,9 @@
     const channelCommand = metadataParts.flatMap((part) => part?.text?.commandRuns || [])
       .map((run) => run?.onTap?.innertubeCommand)
       .find((command) => command?.browseEndpoint) || null;
-    const channelId = cleanText(channelCommand?.browseEndpoint?.browseId, 32);
-    const channelUrl = cleanText(channelCommand?.commandMetadata?.webCommandMetadata?.url, 1000);
+    const avatarCommand = metadata.image?.decoratedAvatarViewModel?.rendererContext?.commandContext?.onTap?.innertubeCommand;
+    const channelId = cleanText((channelCommand || avatarCommand)?.browseEndpoint?.browseId, 32);
+    const channelUrl = cleanText((channelCommand || avatarCommand)?.commandMetadata?.webCommandMetadata?.url, 1000);
     const parts = metadataParts
       .map((part) => cleanText(/views|aufrufe/i.test(part?.accessibilityLabel || '')
         ? part.accessibilityLabel : part?.text?.content, 160))
@@ -494,12 +505,22 @@
     );
     const avatar = largestImage(
       metadata.avatar?.decoratedAvatarViewModel?.avatar?.avatarViewModel?.image?.sources
+      || metadata.image?.decoratedAvatarViewModel?.avatar?.avatarViewModel?.image?.sources
       || model.avatar?.decoratedAvatarViewModel?.avatar?.avatarViewModel?.image?.sources
       || model.channelAvatar?.avatarViewModel?.image?.sources
     );
+    const overlays = (model.contentImage?.thumbnailViewModel || model.thumbnailViewModel)?.overlays || [];
+    const progress = overlays.map((overlay) => overlay?.thumbnailBottomOverlayViewModel?.progressBar
+      ?.thumbnailOverlayProgressBarViewModel?.startPercent).find((value) => Number.isFinite(value));
+    const duration = overlays.flatMap((overlay) => [
+      ...(overlay?.thumbnailOverlayBadgeViewModel?.thumbnailBadges || []),
+      ...(overlay?.thumbnailBottomOverlayViewModel?.badges || [])
+    ]).map((badge) => badge?.thumbnailBadgeViewModel?.text).find((text) => /^\d+(?::\d{2}){1,2}$/.test(text || ''));
     return safeVideo({
       id,
       title,
+      progress,
+      duration,
       channel: fallbackChannel?.title || parts[0],
       channelId: fallbackChannel?.id || channelId,
       channelUrl: fallbackChannel?.baseUrl || channelUrl,
@@ -554,6 +575,27 @@
     }).catch(() => {
       if (destroyed) return;
       subscriptionState = 'error';
+      renderedSignature = '';
+      renderHome();
+    });
+  }
+
+  function loadHistory(force = false) {
+    if (historyState === 'loading') return;
+    if (!force && historyUpdatedAt && Date.now() - historyUpdatedAt < 60 * 1000) return;
+    historyState = 'loading';
+    const url = new URL('/feed/history', location.origin).href;
+    pageDataCache.delete(url);
+    fetchRouteData(url).then((data) => {
+      if (destroyed) return;
+      historyVideos = initialVideos(data).map((video) => ({ ...video, source: 'history' }));
+      historyState = 'ready';
+      historyUpdatedAt = Date.now();
+      renderedSignature = '';
+      renderHome();
+    }).catch(() => {
+      if (destroyed) return;
+      historyState = 'error';
       renderedSignature = '';
       renderHome();
     });
@@ -826,6 +868,7 @@
       return result;
     }
     if (feedMode === 'subscriptions') return subscriptionVideos.slice(0, 200);
+    if (feedMode === 'history') return historyVideos.slice(0, 200);
     const selected = config.homeFeed.videos.map((video) => safeVideo(video, 'selected')).filter(Boolean);
     const selectedIds = new Set(selected.map((video) => video.id));
     const discoveries = [...nativePicks.values()].filter((video) => !selectedIds.has(video.id));
@@ -850,12 +893,13 @@
   }
 
   function setFeedMode(nextMode) {
-    if (!['normal', 'selective', 'music', 'subscriptions'].includes(nextMode) || feedMode === nextMode) return;
+    if (!['normal', 'selective', 'music', 'subscriptions', 'history'].includes(nextMode) || feedMode === nextMode) return;
     nativePicks.clear();
     feedMode = nextMode;
     try { localStorage.setItem('still-youtube-feed-mode', feedMode); } catch {}
     window.dispatchEvent(new CustomEvent('still-youtube-mode-change', { detail: { mode: feedMode } }));
     if (feedMode === 'subscriptions') loadSubscriptions(true);
+    if (feedMode === 'history') loadHistory(true);
     if (feedMode === 'music') {
       loadSubscriptions();
       loadMusicDiscovery();
@@ -872,10 +916,12 @@
       ['normal', 'Normal'],
       ['selective', 'Selective'],
       ['music', 'Music'],
-      ['subscriptions', 'Subscribed']
+      ['subscriptions', 'Subscribed'],
+      ['history', 'History']
     ].forEach(([value, label]) => {
       const button = document.createElement('button');
       button.type = 'button';
+      button.dataset.mode = value;
       button.textContent = label;
       button.classList.toggle('selected', feedMode === value);
       button.setAttribute('aria-pressed', String(feedMode === value));
@@ -1138,6 +1184,14 @@
       duration.textContent = video.duration;
       picture.appendChild(duration);
     }
+    if (video.progress > 0) {
+      const progress = document.createElement('span');
+      progress.className = 'still-video-progress';
+      progress.style.setProperty('--still-progress', `${Math.max(3, video.progress)}%`);
+      progress.setAttribute('role', 'img');
+      progress.setAttribute('aria-label', `Watched ${Math.round(video.progress)}%`);
+      picture.appendChild(progress);
+    }
     videoLink.appendChild(picture);
 
     const details = document.createElement('div');
@@ -1180,7 +1234,8 @@
     title.textContent = video.title;
     titleLink.appendChild(title);
     const meta = document.createElement('p');
-    const source = video.source === 'ai' ? 'AI pick' : video.source === 'subscription' ? 'From subscriptions' : '';
+    const source = video.source === 'ai' ? 'AI pick'
+      : video.source === 'subscription' && feedMode !== 'subscriptions' ? 'From subscriptions' : '';
     if (!channelView) {
       const channelLink = document.createElement(video.channelUrl ? 'a' : 'span');
       channelLink.className = 'still-video-channel-link';
@@ -1197,6 +1252,23 @@
     details.appendChild(info);
     card.append(videoLink, details);
     return card;
+  }
+
+  function homeCards(videos) {
+    const cards = videos.map((video) => {
+      const key = [video.id, video.source, video.avatar, video.meta, video.duration, video.progress, feedMode].join('|');
+      let entry = cardCache.get(video.id);
+      if (!entry || entry.key !== key) {
+        entry = { key, card: videoCard(video) };
+        cardCache.set(video.id, entry);
+      }
+      return entry.card;
+    });
+    if (cardCache.size > 600) {
+      const keep = new Set(videos.map((video) => video.id));
+      for (const id of cardCache.keys()) if (!keep.has(id)) cardCache.delete(id);
+    }
+    return cards;
   }
 
   function loadingCard({ channelView = false, shorts = false } = {}) {
@@ -1466,6 +1538,7 @@
     if (destroyed) return;
     clearTimeout(renderTimer);
     if (isHome() && feedMode === 'subscriptions' && subscriptionState === 'idle') loadSubscriptions();
+    if (isHome() && feedMode === 'history') loadHistory();
     if (isHome() && feedMode === 'music') {
       if (subscriptionState === 'idle') loadSubscriptions();
       if (musicDiscoveryState === 'idle') loadMusicDiscovery();
@@ -1508,6 +1581,7 @@
       enabled: activeChannels.map((channel) => channel.id),
       loading: activeFeed.loading,
       subscriptionState,
+      historyState,
       musicDiscoveryState
     });
     if (signature === renderedSignature && document.querySelector('#still-youtube-home')) return;
@@ -1535,7 +1609,7 @@
       hero.appendChild(heroContent);
     }
     hero.querySelectorAll('.still-feed-mode button').forEach((button) => {
-      const selected = button.textContent.trim().toLocaleLowerCase() === feedMode;
+      const selected = button.dataset.mode === feedMode;
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -1546,10 +1620,12 @@
     }
     feed.replaceChildren();
     feed.setAttribute('aria-label', feedMode === 'music' ? 'Music picked for you'
-      : feedMode === 'subscriptions' ? 'Videos from your subscriptions' : 'Latest videos from your channels');
-    if (videos.length) videos.forEach((video) => feed.appendChild(videoCard(video)));
+      : feedMode === 'subscriptions' ? 'Videos from your subscriptions'
+        : feedMode === 'history' ? 'Your watch history' : 'Latest videos from your channels');
+    if (videos.length) feed.append(...homeCards(videos));
     else if ((feedMode === 'music' && (activeFeed.loading || musicDiscoveryState === 'loading'))
       || (feedMode === 'subscriptions' && subscriptionState === 'loading')
+      || (feedMode === 'history' && (historyState === 'loading' || historyState === 'idle'))
       || (feedMode === 'selective' && activeFeed.loading)) {
       for (let index = 0; index < 12; index += 1) feed.appendChild(loadingCard());
     } else {
@@ -1561,6 +1637,10 @@
           ? subscriptionState === 'error'
             ? 'Could not load your subscriptions. Check that YouTube is signed in.'
             : 'No videos found in your YouTube subscriptions.'
+        : feedMode === 'history'
+          ? historyState === 'error'
+            ? 'Could not load your watch history. Check that YouTube is signed in.'
+            : 'Videos you watch will show up here.'
         : feedMode === 'normal'
           ? 'YouTube did not provide recommendations for this page.'
           : 'No fresh uploads yet. Hover on the left edge to manage your sources.';
@@ -1571,6 +1651,13 @@
         retry.className = 'still-home-retry';
         retry.textContent = 'Reload recommendations';
         retry.addEventListener('click', () => location.reload());
+        empty.appendChild(retry);
+      } else if (feedMode === 'history' && historyState === 'error') {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'still-home-retry';
+        retry.textContent = 'Retry history';
+        retry.addEventListener('click', () => loadHistory(true));
         empty.appendChild(retry);
       } else if (feedMode === 'subscriptions' && subscriptionState === 'error') {
         const retry = document.createElement('button');
@@ -1630,6 +1717,8 @@
         .still-video-link,.still-video-title-link { display:block;color:inherit;text-decoration:none;outline:none }
         .still-video-picture { position:relative;overflow:hidden;width:100%;aspect-ratio:16/9;border-radius:12px;background:#080808;box-shadow:0 0 0 1px rgba(255,255,255,.045);transition:border-radius 180ms ease,box-shadow 180ms ease,transform 220ms cubic-bezier(.2,.8,.2,1) }
         .still-video-picture img { display:block;width:100%;height:100%;object-fit:cover;transform:scale(1.001);transition:filter 180ms ease,transform 360ms cubic-bezier(.2,.8,.2,1) }
+        .still-video-progress { position:absolute;left:0;right:0;bottom:0;height:4px;background:linear-gradient(90deg,#f03 var(--still-progress),rgba(255,255,255,.28) var(--still-progress));pointer-events:none }
+        .still-video-progress ~ .still-video-duration,.still-video-duration:has(~ .still-video-progress) { bottom:11px }
         .still-video-duration { position:absolute;right:7px;bottom:7px;padding:3px 5px;border-radius:4px;color:#fff;background:rgba(0,0,0,.82);font:600 12px/15px Roboto,Arial,sans-serif;letter-spacing:.01em }
         .still-video-card:hover .still-video-picture,.still-video-link:focus-visible .still-video-picture { border-radius:9px;box-shadow:0 0 0 1px rgba(255,255,255,.14);transform:translateY(-2px) }
         .still-video-card:hover .still-video-picture img,.still-video-link:focus-visible .still-video-picture img { filter:brightness(1.045);transform:scale(1.018) }
