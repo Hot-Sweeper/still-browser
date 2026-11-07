@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 27;
+  const VERSION = 28;
   const existing = window.__stillYouTubeHome;
   if (existing?.version === VERSION) {
     existing.update(window.__stillLearningFilterConfig || {});
@@ -174,6 +174,8 @@
   }
 
   function handleNativeNavigateFinish() {
+    clearChannelLookup();
+    document.querySelector('#still-youtube-channel-error')?.remove();
     if (location.pathname === '/' && nativeDataUrl !== location.href) nativePicks.clear();
     nativeDataUrl = location.href;
     if (window.ytInitialData) pageDataCache.set(location.href, window.ytInitialData);
@@ -181,6 +183,8 @@
   }
 
   function handleHistoryChange() {
+    clearChannelLookup();
+    document.querySelector('#still-youtube-channel-error')?.remove();
     renderedSignature = '';
     renderHome();
     ensureRouteData();
@@ -670,6 +674,112 @@
     }) || null;
   }
 
+  // Read endpoints rather than translated labels. Never persist account identity:
+  // YouTube owns account/Brand Account switching and supplies the active menu.
+  function findEndpoint(value, predicate, seen = new Set()) {
+    if (!value || typeof value !== 'object' || seen.has(value)) return null;
+    seen.add(value);
+    if (predicate(value)) return value;
+    for (const child of Object.values(value)) {
+      const found = findEndpoint(child, predicate, seen);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function studioEndpoint(header) {
+    const endpoint = findEndpoint(header, (node) => {
+      try { return new URL(node.url).origin === 'https://studio.youtube.com'; } catch { return false; }
+    });
+    return endpoint?.url || '';
+  }
+
+  let channelMenuObserver;
+  let channelMenuTimer;
+  function clearChannelLookup() {
+    channelMenuObserver?.disconnect();
+    clearTimeout(channelMenuTimer);
+    channelMenuObserver = null;
+    document.documentElement.classList.remove('still-youtube-account-menu');
+    const button = document.querySelector('#still-youtube-my-channel');
+    if (button) button.disabled = false;
+  }
+
+  function openMyChannel(button) {
+    const avatar = document.querySelector('ytd-masthead #avatar-btn, #masthead-container #avatar-btn');
+    if (!avatar) {
+      const signIn = document.querySelector('ytd-masthead a[href*="accounts.google.com"], ytd-masthead a[href*="ServiceLogin"]');
+      if (signIn) { location.href = signIn.href; return; }
+      showChannelError('Your YouTube account is still loading. Try My channel again.');
+      return;
+    }
+    clearChannelLookup();
+    button.disabled = true;
+    document.querySelector('#still-youtube-channel-error')?.remove();
+    // Open a fresh menu, avoiding a stale channel after an account switch.
+    const oldMenu = document.querySelector('ytd-popup-container ytd-multi-page-menu-renderer');
+    oldMenu?.closest('tp-yt-iron-dropdown')?.close?.();
+    document.documentElement.classList.add('still-youtube-account-menu');
+    avatar.click();
+    const read = () => {
+      const menu = document.querySelector('ytd-popup-container ytd-multi-page-menu-renderer');
+      if (!menu) return;
+      const endpoint = findEndpoint(menu.data, (node) => /^UC[\w-]{22}$/.test(node.browseEndpoint?.browseId || ''));
+      const anchor = [...menu.querySelectorAll('a[href]')].find((link) => {
+        try { return new URL(link.href).origin === location.origin && /^\/(?:@[^/]+|channel\/UC[\w-]{22})\/?$/.test(new URL(link.href).pathname); } catch { return false; }
+      });
+      const target = endpoint ? `/channel/${endpoint.browseEndpoint.browseId}` : anchor?.href;
+      if (!target) return;
+      clearChannelLookup();
+      // Full navigation also refreshes the native header and owner controls.
+      location.href = new URL(target, location.origin).href;
+    };
+    channelMenuObserver = new MutationObserver(read);
+    channelMenuObserver.observe(document.documentElement, { childList: true, subtree: true });
+    channelMenuTimer = setTimeout(() => {
+      clearChannelLookup();
+      document.documentElement.classList.add('still-youtube-account-menu');
+      showChannelError('Choose View your channel in the YouTube account menu, or try My channel again.');
+    }, 8000);
+    read();
+  }
+
+  function showChannelError(message) {
+    let status = document.querySelector('#still-youtube-channel-error');
+    if (!status) {
+      status = document.createElement('div');
+      status.id = 'still-youtube-channel-error';
+      status.setAttribute('role', 'status');
+      document.body.appendChild(status);
+    }
+    status.textContent = message;
+  }
+
+  function mountMyChannel() {
+    const show = (feedMode !== 'normal' && isCustomRoute(location.href)) || location.pathname === '/watch' || isHome();
+    let button = document.querySelector('#still-youtube-my-channel');
+    if (!show) { button?.remove(); clearChannelLookup(); return; }
+    if (button) return;
+    button = document.createElement('button');
+    button.id = 'still-youtube-my-channel';
+    button.type = 'button';
+    button.setAttribute('aria-label', 'My channel');
+    button.title = 'My channel';
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    const head = document.createElementNS(svg.namespaceURI, 'circle');
+    head.setAttribute('cx', '12');
+    head.setAttribute('cy', '8');
+    head.setAttribute('r', '4');
+    const shoulders = document.createElementNS(svg.namespaceURI, 'path');
+    shoulders.setAttribute('d', 'M4 22v-3a8 8 0 0 1 16 0v3');
+    svg.append(head, shoulders);
+    button.appendChild(svg);
+    button.addEventListener('click', () => openMyChannel(button));
+    document.body.appendChild(button);
+  }
+
   function channelPageData() {
     const data = routeData() || {};
     const metadata = data?.metadata?.channelMetadataRenderer || {};
@@ -703,15 +813,28 @@
       900
     );
     const baseUrl = cleanText(metadata.vanityChannelUrl || metadata.ownerUrls?.[0] || metadata.channelUrl || location.origin + location.pathname.split('/').slice(0, 3).join('/'), 1000)
-      .replace(/^http:/i, 'https:');
+      .replace(/^http:/i, 'https:')
+      .replace(/\/(?:featured|videos|shorts|streams|posts|community|playlists)\/?$/, '');
     const subscribeButton = nativeSubscribeButton();
     const subscribeLabel = cleanText(subscribeButton?.textContent, 80) || 'Subscribe';
-    const tabs = [...(useNativeDom ? document.querySelectorAll('yt-tab-group-shape yt-tab-shape[tab-title]') : [])]
+    let tabs = [...(useNativeDom ? document.querySelectorAll('yt-tab-group-shape yt-tab-shape[tab-title]') : [])]
       .map((tab) => ({
         label: cleanText(tab.getAttribute('tab-title') || tab.textContent, 40),
         selected: tab.getAttribute('aria-selected') === 'true'
       }))
       .filter((tab) => /^(?:Home|Videos|Shorts|Live|Playlists|Posts|Community)$/i.test(tab.label));
+    const dataTabs = (data.contents?.twoColumnBrowseResultsRenderer?.tabs || []).flatMap((entry) => {
+      const tab = entry.tabRenderer;
+      const href = tab?.endpoint?.commandMetadata?.webCommandMetadata?.url;
+      if (!href) return [];
+      try {
+        const url = new URL(href, location.origin);
+        if (url.origin !== location.origin || !/^\/(?:@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)(?:\/(?:featured|videos|shorts|streams|playlists|posts|community))?\/?$/.test(url.pathname)) return [];
+        // Featured is YouTube's native Home URL; Still's Home uses the base.
+        return [{ label: cleanText(tab.title, 60), href: url.href.replace(/\/featured\/?$/, ''), selected: tab.selected === true }];
+      } catch { return []; }
+    });
+    if (dataTabs.length) tabs = dataTabs;
     return {
       title,
       handle,
@@ -720,6 +843,7 @@
       banner,
       description,
       baseUrl,
+      studioUrl: studioEndpoint(data.header) || (data.header?.c4TabbedHeaderRenderer?.isChannelOwner ? "https://studio.youtube.com/" : ""),
       subscribeLabel,
       subscribed: /subscribed|abonniert/i.test(subscribeLabel),
       tabs
@@ -1299,7 +1423,10 @@
       home: '',
       videos: '/videos',
       shorts: '/shorts',
-      live: '/streams'
+      live: '/streams',
+      posts: '/posts',
+      community: '/community',
+      playlists: '/playlists'
     };
     return `${channel.baseUrl.replace(/\/+$/, '')}${suffixes[label.toLocaleLowerCase()] || ''}`;
   }
@@ -1367,7 +1494,15 @@
       renderedSignature = '';
       scheduleRender(500);
     });
-    identity.append(avatar, copy, subscribe);
+    if (channel.studioUrl) {
+      const studio = document.createElement('a');
+      studio.className = 'still-channel-subscribe still-channel-studio';
+      studio.href = channel.studioUrl;
+      studio.textContent = 'YouTube Studio';
+      identity.append(avatar, copy, studio);
+    } else {
+      identity.append(avatar, copy, subscribe);
+    }
     hero.appendChild(identity);
     return hero;
   }
@@ -1382,9 +1517,11 @@
       { label: 'Shorts', selected: /\/shorts\/?$/i.test(location.pathname) },
       { label: 'Live', selected: /\/streams\/?$/i.test(location.pathname) }
     ];
-    tabs.filter((tab) => /^(?:Home|Videos|Shorts|Live)$/i.test(tab.label)).forEach((tab) => {
+    const visibleTabs = [...tabs];
+    if (channel.studioUrl && !visibleTabs.some((tab) => /\/(?:posts|community)\/?$/.test(tab.href || '') || /^(?:Posts|Community)$/i.test(tab.label))) visibleTabs.push({ label: 'Posts' });
+    visibleTabs.filter((tab) => tab.href || /^(?:Home|Videos|Shorts|Live|Playlists|Posts|Community)$/i.test(tab.label)).forEach((tab) => {
       const link = document.createElement('a');
-      link.href = channelTabHref(channel, tab.label);
+      link.href = tab.href || channelTabHref(channel, tab.label);
       link.textContent = tab.label;
       link.classList.toggle('selected', tab.selected);
       if (tab.selected) link.setAttribute('aria-current', 'page');
@@ -1493,6 +1630,7 @@
       avatar: channel.avatar,
       banner: channel.banner,
       subscribeLabel: channel.subscribeLabel,
+      studioUrl: channel.studioUrl,
       tabs: channel.tabs,
       videos: videos.map((video) => `${video.id}:${video.thumbnail}:${video.meta}`)
     });
@@ -1538,6 +1676,7 @@
   function renderHome() {
     if (destroyed || !document.body) return;
     clearTimeout(renderTimer);
+    mountMyChannel();
     if (isHome() && feedMode === 'subscriptions' && subscriptionState === 'idle') loadSubscriptions();
     if (isHome() && feedMode === 'history') loadHistory();
     if (isHome() && feedMode === 'music') {
@@ -1558,7 +1697,7 @@
       renderSearch();
       return;
     }
-    if (isChannel()) {
+    if (isChannel() && isCustomRoute(location.href)) {
       renderChannel();
       return;
     }
@@ -1685,6 +1824,19 @@
       style = document.createElement('style');
       style.id = 'still-youtube-home-style';
       style.textContent = `
+        html.still-youtube-account-menu ytd-popup-container { position:relative;z-index:2147483500 }
+        /* Mirror the watch Home corner, including its timing and inward motion. */
+        #still-youtube-my-channel { position:fixed;z-index:2147483150;top:0;right:0;display:grid;place-items:start end;width:112px;height:78px;padding:18px 20px 0 0;box-sizing:border-box;border:0;border-radius:0 0 0 22px;background:transparent;color:#f5f5f5;cursor:pointer }
+        #still-youtube-my-channel svg { width:30px;height:30px;padding:6px;border-radius:50%;background:rgba(0,0,0,.8);fill:none;stroke:currentColor;stroke-width:1.8;opacity:0;transform:translate(10px,-7px) scale(.78);transition:opacity 160ms cubic-bezier(0,0,.58,1),transform 190ms cubic-bezier(.2,.8,.2,1) }
+        #still-youtube-my-channel:hover svg,#still-youtube-my-channel:focus-visible svg,#still-youtube-my-channel:disabled svg { opacity:1;transform:translate(0,0) scale(1) }
+        #still-youtube-my-channel:active svg { transform:scale(.94) }
+        #still-youtube-my-channel:focus-visible { outline:2px solid #3ea6ff;outline-offset:-5px }
+        #still-youtube-my-channel:disabled { cursor:progress }
+        #still-youtube-channel-error { position:fixed;z-index:2147483600;top:82px;right:20px;max-width:min(360px,80vw);padding:16px;border:1px solid #666;border-radius:12px;background:#181818;color:#f5f5f5;font:14px/1.5 Roboto,Arial,sans-serif }
+        .still-channel-studio { display:inline-block;text-decoration:none;text-align:center }
+        .still-channel-studio:focus-visible,.still-channel-tabs a:focus-visible { outline:2px solid #3ea6ff;outline-offset:3px }
+        @media(hover:none) { #still-youtube-my-channel svg { opacity:1;transform:none } }
+        @media(prefers-reduced-motion:reduce) { #still-youtube-my-channel svg { transform:none !important;transition:opacity 150ms cubic-bezier(0,0,.58,1) } }
         html.still-youtube-custom-home,html.still-youtube-custom-home body,html.still-youtube-custom-search,html.still-youtube-custom-search body,html.still-youtube-custom-channel,html.still-youtube-custom-channel body { overflow:hidden !important;background:#000 !important }
         #still-youtube-home,#still-youtube-search,#still-youtube-channel { position:fixed;z-index:2147482000;inset:0;overflow-x:hidden;overflow-y:auto;background:#000;color:#f5f5f5;font-family:Roboto,Arial,sans-serif;font-feature-settings:'kern';scrollbar-color:#000 #000;isolation:isolate }
         #still-youtube-home::-webkit-scrollbar,#still-youtube-home::-webkit-scrollbar-track,#still-youtube-home::-webkit-scrollbar-thumb,#still-youtube-search::-webkit-scrollbar,#still-youtube-search::-webkit-scrollbar-track,#still-youtube-search::-webkit-scrollbar-thumb,#still-youtube-channel::-webkit-scrollbar,#still-youtube-channel::-webkit-scrollbar-track,#still-youtube-channel::-webkit-scrollbar-thumb { width:10px;background:#000 }
@@ -1862,6 +2014,9 @@
       document.querySelector('#still-youtube-search')?.remove();
       document.querySelector('#still-youtube-channel')?.remove();
       document.querySelector('#still-youtube-native-mode')?.remove();
+      clearChannelLookup();
+      document.querySelector('#still-youtube-my-channel')?.remove();
+      document.querySelector('#still-youtube-channel-error')?.remove();
       document.querySelector('#still-youtube-home-style')?.remove();
     }
   };

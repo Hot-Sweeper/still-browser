@@ -45,3 +45,17 @@ the window controls slide in from the top edge when the pointer reaches it.
 - A 2 px light runs along the top edge while the agent acts on the visible
   page. It loops by exactly one tile, so it never jumps.
 - Reduced motion keeps the colour changes and drops movement.
+
+## YouTube creator navigation
+- My channel sits in the top right of Still's custom YouTube views and watch
+  pages. It mirrors the Home corner's inward reveal: 160 ms opacity, 190 ms
+  transform, mirrored 10 px horizontal and 7 px vertical offset, scale .78.
+  Keyboard focus reveals it too; touch keeps it visible; reduced motion
+  removes movement. A dark backing keeps the glyph readable over video.
+- It opens YouTube's own active account menu and follows its channel endpoint.
+  Account identity is never stored, so switching Brand Accounts stays native.
+- Channel owners see the Studio destination supplied by YouTube's header
+  instead of Subscribe. Other channels keep their subscription control.
+- Channel tabs preserve YouTube's supplied labels and destinations, including
+  Posts and Playlists. Posts/Community and other native sections never receive
+  Still's video-grid overlay, keeping YouTube's real editor and controls usable.
