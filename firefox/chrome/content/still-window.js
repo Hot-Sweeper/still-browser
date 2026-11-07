@@ -2286,13 +2286,13 @@
       stop);
   }
 
-  function showAgentPanel() {
+  function showAgentPanel({ keyboard = false } = {}) {
     hideUtilityPanel();
     renderAgentPanel();
     agentPanel.hidden = false;
     agentButton.setAttribute("aria-expanded", "true");
     agentButton.classList.add("panel-open");
-    agentPanel.querySelector("button")?.focus({ preventScroll: true });
+    if (keyboard) agentPanel.querySelector("button")?.focus({ preventScroll: true });
   }
 
   function hideAgentPanel() {
@@ -2302,7 +2302,10 @@
     agentButton.classList.remove("panel-open");
   }
 
-  agentButton.addEventListener("click", () => { if (agentPanel.hidden) showAgentPanel(); else hideAgentPanel(); });
+  agentButton.addEventListener("click", (event) => {
+    if (agentPanel.hidden) showAgentPanel({ keyboard: event.detail === 0 });
+    else hideAgentPanel();
+  });
   agentPanel.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { event.preventDefault(); hideAgentPanel(); agentButton.focus(); }
   });

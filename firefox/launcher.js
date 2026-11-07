@@ -59,7 +59,19 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exitCode = 1;
-});
+// `still mcp` and `still agent ...` talk to a running Still (see agent/);
+// they never start a second browser process themselves.
+const [mode, ...rest] = process.argv.slice(2);
+if (mode === 'mcp') {
+  require('./agent/mcp').main();
+} else if (mode === 'agent') {
+  require('./agent/cli').main(rest).catch((error) => {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+} else {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+}

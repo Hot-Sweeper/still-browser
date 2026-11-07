@@ -133,6 +133,41 @@ the same spring as the page strip.
   progress). Channel feeds are cached across restarts, shown at once, and
   refreshed in the background only from the home page, six requests at a time.
 
+## Agents (MCP and CLI)
+
+AI agents such as Claude Code, Codex and T3 Code can use Still, with your own
+tabs, cookies and saved sign-ins.
+
+- `still mcp` is an MCP server (stdio). Register it once with
+  `still agent setup`, which adds it to Claude Code and Codex. T3 Code runs
+  those agents, so it picks it up too. Any other MCP client can use the
+  command `still` with the argument `mcp`.
+- `still agent <command>` does the same from a shell. Run `still agent help`
+  for the list (tabs, open, snapshot, click, type, login, signed-in and more).
+- Inside Still, `chrome/content/StillAgent.sys.mjs` listens on
+  `$XDG_RUNTIME_DIR/still/agent.sock`, which only your user can open. When an
+  agent connects, it starts Firefox's own WebDriver BiDi engine in its
+  "dynamic" mode, which Firefox built for AI assistants: `navigator.webdriver`
+  stays false and no preferences change. It connects to that engine
+  in-process. Firefox puts these sessions in a separate container, so Still
+  points them at the default one to keep your sign-ins.
+- Page snapshots (an accessibility tree with refs like `e12`, including
+  cross-origin frames) come from Playwright's injected script. It is vendored
+  as `chrome/content/still-agent-playwright.js` (Apache-2.0), and
+  `tools/agent/extract-playwright-injected.js` refreshes it from a
+  playwright-core package.
+- Pages an agent opens are hidden agent tabs, outside the five slots. A mark
+  in the bar shows that an agent is connected and turns while it works. Its
+  panel lists the agent's tabs, shows any of them in a slot, and stops agent
+  access. A thin light along the top edge shows the agent acting on the page
+  in front of you.
+- `log_in` fills a sign-in form from Firefox's saved passwords. The password
+  is typed into the page and never returned to the agent. A Primary Password,
+  if you set one, still asks you first.
+- Turn agent access off with the pref `still.agent.enabled` = false.
+- Install the client's dependencies once with
+  `npm install --prefix firefox/agent`.
+
 ## Run and check
 
 - `npm run firefox:shortcut` creates **Still (Firefox)** shortcuts on the

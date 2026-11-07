@@ -1,0 +1,10 @@
+{
+  "name": "still-agent",
+  "private": true,
+  "description": "Still's MCP server and agent CLI. They talk to the agent bridge inside Still.",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  }
+}

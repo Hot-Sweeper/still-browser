@@ -740,6 +740,14 @@ function unpack(remote, keepNodes = false) {
   }
 }
 
+// "mail.google.com" -> "google.com"; IP addresses and localhost stay as they are.
+function siteOf(hostOrUrl) {
+  let host = hostOrUrl;
+  try { if (/^[a-z][a-z0-9+.-]*:\/\//i.test(hostOrUrl)) host = Services.io.newURI(hostOrUrl).host; } catch { return ""; }
+  if (!host) return "";
+  try { return Services.eTLD.getBaseDomainFromHost(host); } catch { return host; }
+}
+
 // The top-level page a frame belongs to.
 function topContextOf(context) {
   try {
@@ -1050,7 +1058,17 @@ const METHODS = {
     for (const file of paths) if (!(await IOUtils.exists(file))) throw fail(`File not found: ${file}`, "no_file");
     const target = await this.locate(tab, ref, { scroll: false });
     const bidi = await this.engine();
-    await bidi.send("input.setFiles", { context: target.context, element: target.element, files: paths });
+    // Firefox only lets a page's process build File objects from paths while
+    // dom.file.createInChild is on (automation normally leaves it on). Turn
+    // it on just for this call.
+    const defaults = Services.prefs.getDefaultBranch("");
+    const before = defaults.getBoolPref("dom.file.createInChild", false);
+    defaults.setBoolPref("dom.file.createInChild", true);
+    try {
+      await bidi.send("input.setFiles", { context: target.context, element: target.element, files: paths });
+    } finally {
+      defaults.setBoolPref("dom.file.createInChild", before);
+    }
     return { tab: describeTab(tab), files: paths.length };
   },
 
@@ -1095,8 +1113,8 @@ const METHODS = {
     for (const cookie of Services.cookies.cookies) {
       if (cookie.expiry && cookie.expiry < now) continue;
       if (cookie.originAttributes?.userContextId || cookie.originAttributes?.privateBrowsingId) continue;
-      let site;
-      try { site = Services.eTLD.getBaseDomainFromHost(cookie.host.replace(/^\./, "")); } catch { continue; }
+      const site = siteOf(cookie.host.replace(/^\./, ""));
+      if (!site) continue;
       const known = KNOWN_SESSIONS.find(([domain]) => site === domain);
       if (known) {
         if (known[2].some((name) => name.endsWith("-") ? cookie.name.startsWith(name) : cookie.name === name)) add(site, { cookie: cookie.name, sure: true, name: known[1] });
@@ -1109,8 +1127,8 @@ const METHODS = {
       if (lazy.LoginHelper.isPrimaryPasswordSet() && !Services.logins.isLoggedIn) loginsNote = "Saved passwords are locked behind the Primary Password, so they are not listed.";
       else {
         for (const login of await Services.logins.getAllLogins()) {
-          let site;
-          try { site = Services.eTLD.getBaseDomainFromHost(Services.io.newURI(login.origin).host); } catch { continue; }
+          const site = siteOf(login.origin);
+          if (!site) continue;
           add(site, { login: login.username || "(no username)" });
         }
       }
