@@ -50,6 +50,9 @@ class StillClient {
     let info = this.info();
     let socket = null;
     if (info) socket = await this.open(info).catch(() => null);
+    if (!socket && stillIsRunning()) {
+      throw new StillError('Still is running without agent access. Close Still and open it again to turn it on.', 'restart_needed');
+    }
     if (!socket && launch) {
       launchStill();
       const end = Date.now() + timeout;
@@ -117,6 +120,21 @@ class StillClient {
   close() {
     this.socket?.end();
     this.socket = null;
+  }
+}
+
+// Is a Still browser using the profile? (Firefox's `lock` link names its pid.)
+function stillIsRunning() {
+  if (process.platform === 'win32' || process.env.STILL_AGENT_DIR) return false;
+  try {
+    const { dataRoot } = require('../install-runtime');
+    const profile = process.env.STILL_FIREFOX_PROFILE || path.join(dataRoot, 'profile');
+    const pid = Number(fs.readlinkSync(path.join(profile, 'lock')).split('+').pop());
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
   }
 }
 
