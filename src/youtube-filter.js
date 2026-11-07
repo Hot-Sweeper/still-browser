@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 21;
+  const VERSION = 22;
   const existing = window.__stillLearningFilter;
   if (existing?.version === VERSION) {
     existing.update(window.__stillLearningFilterConfig || {});
@@ -551,7 +551,13 @@
     scan();
   }
 
-  observer = new MutationObserver(() => scheduleScan());
+  observer = new MutationObserver((records) => {
+    // Playback counters and comments are unrelated to recommendation cards.
+    // Keep watching structural changes elsewhere for new cards/ads/routes.
+    if (!records.some(({ target }) => !(target.nodeType === 1 ? target : target.parentElement)
+      ?.closest('#movie_player, ytd-comments, #still-youtube-home, #still-youtube-search, #still-youtube-channel, #still-youtube-download-host, #still-youtube-player-lab, #still-youtube-player-lab-panel'))) return;
+    scheduleScan();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   document.addEventListener('yt-navigate-finish', () => scheduleScan(0));
   window.addEventListener('popstate', () => scheduleScan(0));

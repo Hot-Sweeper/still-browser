@@ -1,0 +1,10 @@
+/* Applied before document_start JS: no native feed underneath the first UI. */
+html[data-still-youtube-surface="custom"],
+html[data-still-youtube-surface="custom"] body,
+html[data-still-youtube-surface="custom"] ytd-app { background:#000 !important; color:#f1f1f1; }
+html[data-still-youtube-surface="custom"] :is(ytd-page-manager, ytd-masthead, #masthead-container, ytd-mini-guide-renderer, #guide),
+html[data-still-youtube-surface="custom"] :is(ytd-page-manager, ytd-masthead, #masthead-container, ytd-mini-guide-renderer, #guide) * { visibility:hidden !important; }
+/* Keep native dialogs, consent and sign-in surfaces available. */
+html[data-still-youtube-surface="custom"] :is(ytd-popup-container, tp-yt-paper-dialog, dialog[open]),
+html[data-still-youtube-surface="custom"] :is(ytd-popup-container, tp-yt-paper-dialog, dialog[open]) * { visibility:visible !important; }
+html[data-still-youtube-surface="watch"] :is(ytd-masthead, #masthead-container, #cinematics, ytd-cinematic-container-renderer) { display:none !important; }

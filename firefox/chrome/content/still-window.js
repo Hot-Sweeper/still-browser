@@ -89,7 +89,7 @@
     downloads: { label: "Downloads", paths: ["M12 3.5v11m-4-4 4 4 4-4M5 19.5h14"] },
     permissions: { label: "Site Permissions", paths: ["M12 3.2 19 6v5.1c0 4.4-2.8 7.6-7 9.7-4.2-2.1-7-5.3-7-9.7V6l7-2.8Z", "M9.2 12.1 11 14l3.9-4.2"] },
     browser: { label: "Browser Setup", paths: [["circle", { cx: "12", cy: "12", r: "8.5" }], "M3.8 12h16.4M12 3.5c-2.2 2.3-3.4 5.2-3.4 8.5s1.2 6.2 3.4 8.5c2.2-2.3 3.4-5.2 3.4-8.5S14.2 5.8 12 3.5Z"] },
-    theme: { label: "Appearance", className: "theme-mode-icon", paths: [["circle", { cx: "12", cy: "12", r: "8.5" }], ["path", { class: "theme-fill", d: "M12 3.5a8.5 8.5 0 0 0 0 17Z" }]] },
+    theme: { label: "Appearance", className: "theme-mode-icon", paths: [["circle", { cx: "12", cy: "12", r: "8.5" }], ["path", { class: "theme-fill", d: "M12 3.5a8.5 8.5 0 0 0 0 17Z" }], ["circle", { class: "theme-full", cx: "12", cy: "12", r: "8.5" }], ["circle", { class: "theme-ring", cx: "12", cy: "12", r: "11" }]] },
     tabdock: { label: "Dock Slide", className: "tab-dock-mode-icon", paths: [["rect", { x: "3", y: "7.5", width: "18", height: "9", rx: "4.5" }], "M8.5 12h7m-2.3-2.2 2.3 2.2-2.3 2.2"] }
   };
   if (!utilityModes.includes(state.utilityMode)) state.utilityMode = "bookmarks";
@@ -100,6 +100,12 @@
 
   function slotIndex(tab) {
     return slotTabs().indexOf(tab);
+  }
+
+  // A tab's place in Firefox's tab list. Firefox 156 renamed the old
+  // `_tPos` to `index`; reading the missing one sent every move to the end.
+  function tabPos(tab) {
+    return Number.isInteger(tab?.index) ? tab.index : gBrowser.tabs.indexOf(tab);
   }
 
   function panelOf(tab) {
@@ -143,6 +149,7 @@
   }
 
   function slotTitle(tab) {
+    if (tab.stillDownloadTitle) return tab.stillDownloadTitle;
     if (isHomeUrl(tabUrl(tab)) && !tab.hasAttribute("busy")) return "Still";
     return tab.label || "Untitled";
   }
@@ -200,7 +207,8 @@
   const topControls = h("div", { class: "top-controls" }, utilityButton, minimizeButton, fullscreenButton, closeButton);
   const utilityPanel = h("div", { class: "utility-panel", hidden: true });
   // The current slot's soft light. It moves to whichever slot is selected.
-  const chrome = h("div", { id: "still-chrome", role: "banner", "aria-label": "Still controls" }, slotRow, topControls, utilityPanel);
+  const auraWrap = h("div", { id: "still-tab-aura-wrap", "aria-hidden": "true" }, h("div", { id: "still-tab-aura" }));
+  const chrome = h("div", { id: "still-chrome", role: "banner", "aria-label": "Still controls" }, auraWrap, slotRow, topControls, utilityPanel);
 
   const toastMessage = h("span");
   const toastAction = h("button", { type: "button", hidden: true });
@@ -427,6 +435,7 @@
   function faviconFor(tab, className = "slot-favicon") {
     const url = tabUrl(tab);
     if (isHomeUrl(url)) return h("img", { class: `${className} brand-favicon`, src: ICON, alt: "" });
+    if (tab.stillDownload) return h("span", { class: `${className} download-favicon`, "aria-hidden": "true" }, icon(arrowPaths));
     const image = tab.getAttribute("image");
     const letter = () => h("span", { class: `${className} placeholder`, "aria-hidden": "true",
       text: slotTitle(tab).trim().charAt(0).toLocaleUpperCase() || "·" });
@@ -463,12 +472,16 @@
       else if (event.key === " ") { event.preventDefault(); activate(pill.stillTab); }
     });
     pill.addEventListener("mouseenter", () => warmTab(pill.stillTab));
+    pill.addEventListener("pointerenter", () => auraHover(pill, true));
+    pill.addEventListener("pointerleave", () => auraHover(pill, false));
+    pill.addEventListener("pointerdown", (event) => { if (event.button === 0 && !event.target.closest("button")) auraPress(pill); });
+    pill.addEventListener("keydown", (event) => { if (!event.repeat && event.target === pill && (event.key === "Enter" || event.key === " ")) auraPress(pill); });
     attachDrag(pill);
     return pill;
   }
 
   function closeGlyph() {
-    return icon(["m8 8 8 8m0-8-8 8"], "close-icon");
+    return icon(["M8 8l8 8M16 8l-8 8"], "close-icon");
   }
 
   function emptyPill(index) {
@@ -497,7 +510,7 @@
   function updatePill(pill, tab, index) {
     const active = tab === gBrowser.selectedTab;
     pill.classList.toggle("active", active);
-    pill.classList.toggle("loading", tab.hasAttribute("busy"));
+    pill.classList.toggle("loading", tab.hasAttribute("busy") || tab.stillDownload?.kind === "running");
     pill.classList.toggle("muted", tab.hasAttribute("muted"));
     pill.classList.toggle("playing", tab.hasAttribute("soundplaying"));
     pill.setAttribute("aria-pressed", String(active));
@@ -507,7 +520,7 @@
     pill.title = `${title}\nDouble-click to search or enter an address`;
     pill.querySelector(".slot-close").setAttribute("aria-label", `Close slot ${index + 1}`);
     const iconHost = pill.querySelector(".slot-icon");
-    const iconKey = `${isHomeUrl(tabUrl(tab))}|${tab.getAttribute("image") || ""}|${title.charAt(0)}`;
+    const iconKey = `${isHomeUrl(tabUrl(tab))}|${Boolean(tab.stillDownload)}|${tab.getAttribute("image") || ""}|${title.charAt(0)}`;
     if (iconHost.dataset.key !== iconKey) {
       iconHost.dataset.key = iconKey;
       iconHost.replaceChildren(faviconFor(tab));
@@ -539,6 +552,7 @@
     });
     while (slotRow.children.length > SLOT_COUNT) slotRow.lastElementChild.remove();
     placeShimmerAnchors();
+    auraSync();
     renderUtilityButton();
     if (state.dock.visible) buildDock();
   }
@@ -588,7 +602,7 @@
     const target = tabs[Math.max(0, Math.min(tabs.length - 1, targetIndex))];
     if (!target || target === tab) return;
     const before = new Map([...slotRow.children].map((node) => [node, node.getBoundingClientRect()]));
-    gBrowser.moveTabTo(tab, { tabIndex: target._tPos, forceUngrouped: true });
+    gBrowser.moveTabTo(tab, { tabIndex: tabPos(target), forceUngrouped: true });
     renderSlots();
     if (!animationsAllowed()) return;
     for (const node of slotRow.children) {
@@ -598,9 +612,9 @@
       const dx = old.left - now.left;
       if (!dx) continue;
       node.animate([
-        { transform: `translateX(${dx}px) scale(.965)`, filter: "brightness(1.18)" },
-        { transform: "translateX(0) scale(1)", filter: "brightness(1)" }
-      ], { duration: 430, easing: EASE });
+        { translate: `${dx}px 0`, scale: ".965", filter: "brightness(1.18)" },
+        { translate: "0 0", scale: "1", filter: "brightness(1)" }
+      ], { duration: 430, easing: EASE, composite: "add" });
     }
   }
 
@@ -649,8 +663,9 @@
   // Layout coordinates, so it lines up even while the bar is sliding in.
   function placeSheet(sheet, pill) {
     const box = { x: pill.offsetLeft + slotRow.offsetLeft, y: pill.offsetTop + slotRow.offsetTop, width: pill.offsetWidth, height: pill.offsetHeight };
-    const width = Math.min(Math.max(box.width, 520), chrome.clientWidth - 28);
-    const left = Math.max(14, Math.min(box.x, chrome.clientWidth - width - 14));
+    const inset = parseFloat(getComputedStyle(chrome).getPropertyValue("--still-toolbar-edge")) || 16;
+    const width = Math.min(Math.max(box.width, 520), chrome.clientWidth - 2 * inset);
+    const left = Math.max(inset, Math.min(box.x, chrome.clientWidth - width - inset));
     sheet.style.width = `${width}px`;
     sheet.style.left = `${left}px`;
     sheet.style.top = `${box.y + box.height - 1}px`;
@@ -957,44 +972,184 @@
     return centers[from] + (centers[to] - centers[from]) * (clamped - from);
   }
 
-  function glideShimmer(samples, duration) {
-    const pillsInOrder = slotTabs().map((tab) => pills.get(tab));
-    if (!pillsInOrder.length || pillsInOrder.some((pill) => !pill?.isConnected)) return;
-    const running = slotRow.getAnimations().find((animation) => animation.id === "still-shimmer");
-    running?.cancel();
-    if (!chrome.classList.contains("open") || !animationsAllowed()) return;
-    placeShimmerAnchors();
-    const centers = pillsInOrder.map((pill) => pill.offsetLeft + pill.offsetWidth / 2);
-    const last = samples.length - 1;
-    // Fades in fast (or not at all when it was already sweeping), and
-    // dissolves into the new slot as it closes in: brightness follows the
-    // distance still to travel, so it never lingers while settling.
-    const target = samples[last];
-    const frames = samples.map((x, k) => {
-      const p = k / last;
-      const rise = running ? 1 : Math.min(1, p / 0.1);
-      const d = Math.min(1, Math.abs(target - x) / 0.4);
-      const near = d * d * (3 - 2 * d);
-      return { "--still-shimmer-x": `${shimmerCenterAt(x, centers).toFixed(1)}px`, "--still-shimmer-alpha": (rise * near).toFixed(3), offset: p };
-    });
-    // A comet: bright leading edge, soft tail behind, facing the way it goes.
-    const direction = Math.sign(target - samples[0]) || 1;
-    slotRow.style.setProperty("--still-shimmer-angle", direction > 0 ? "90deg" : "270deg");
-    slotRow.style.setProperty("--still-shimmer-peak", direction > 0 ? "0.8" : "0.2");
-    const sweep = slotRow.animate(frames, { duration: duration * 1000, easing: "linear" });
-    sweep.id = "still-shimmer";
-    // The new slot answers with a short soft light on its edge the moment
-    // the band arrives (close enough that it has started to dissolve).
-    clearTimeout(state.landTimer);
-    const arrive = samples.findIndex((x) => Math.abs(target - x) < 0.18);
-    const landTab = slotTabs()[Math.round(target)];
-    state.landTimer = setTimeout(() => {
-      const pill = pills.get(landTab);
-      if (!pill || landTab !== gBrowser.selectedTab) return;
-      pill.classList.remove("landed");
-      void pill.offsetWidth;
-      pill.classList.add("landed");
-    }, Math.max(0, arrive) / last * duration * 1000);
+  // ------------------------------------------------------------ tab aura
+  // Ported from Still's native build (aura.js, "bubbly tabs"): one light
+  // travels behind the tabs to the selected one, overshooting a little and
+  // swelling on the way, and the tab it lands on gets a soft, area-keeping
+  // squish. Tabs also squish on hover and press. The light's position and
+  // shape live on #still-chrome as --still-aura-* values, read by the layer
+  // behind the row and by each tab (the light seen through its glass).
+  const AURA_DURATION = 560;
+  const aura = { index: -1, animation: null, pillAnimation: null, pill: null, hovers: new Map(), presses: new Map() };
+  const auraReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  function auraState() {
+    const style = window.getComputedStyle(chrome);
+    const read = (name, fallback) => {
+      const value = parseFloat(style.getPropertyValue(name));
+      return Number.isFinite(value) ? value : fallback;
+    };
+    return { x: read("--still-aura-x", NaN), sx: read("--still-aura-sx", 1), sy: read("--still-aura-sy", 1) };
+  }
+
+  function auraSet(x, width) {
+    chrome.style.setProperty("--still-aura-x", `${x}px`);
+    chrome.style.setProperty("--still-aura-w", `${width}px`);
+    chrome.style.setProperty("--still-aura-sx", "1");
+    chrome.style.setProperty("--still-aura-sy", "1");
+    chrome.style.setProperty("--still-aura-o", ".82");
+  }
+
+  function auraMove(index, instant = false, layout = false) {
+    const list = slotTabs().map((tab) => pills.get(tab));
+    const button = list[index];
+    if (!button?.isConnected || (index === aura.index && !layout)) return;
+    if (!button.offsetWidth) return;
+    auraWrap.style.left = `${slotRow.offsetLeft}px`;
+    auraWrap.style.top = `${slotRow.offsetTop}px`;
+    auraWrap.style.width = `${slotRow.offsetWidth}px`;
+    const old = aura.index;
+    const current = auraState();
+    const from = old < 0 || !Number.isFinite(current.x) ? button.offsetLeft : current.x;
+    aura.animation?.cancel();
+    aura.animation = null;
+    auraReleasePill();
+    aura.index = index;
+    const x = button.offsetLeft;
+    auraSet(x, button.offsetWidth);
+    if (instant || old < 0 || auraReduced.matches || !animationsAllowed()) return;
+    const overshoot = Math.sign(x - from) * Math.min(8, Math.abs(x - from) * 0.025);
+    const animation = chrome.animate([
+      { "--still-aura-x": `${from}px`, "--still-aura-sx": String(current.sx || 1), "--still-aura-sy": String(current.sy || 1), "--still-aura-o": ".82", easing: "cubic-bezier(.22,.7,.25,1)" },
+      { offset: 0.76, "--still-aura-x": `${x + overshoot}px`, "--still-aura-sx": "1.035", "--still-aura-sy": "1.12", "--still-aura-o": "1", easing: "cubic-bezier(.2,0,.2,1)" },
+      { "--still-aura-x": `${x}px`, "--still-aura-sx": "1", "--still-aura-sy": "1", "--still-aura-o": ".82" }
+    ], { duration: AURA_DURATION, fill: "both" });
+    aura.animation = animation;
+    auraBounce(button);
+    animation.onfinish = () => {
+      if (aura.animation !== animation) return;
+      animation.cancel();
+      aura.animation = null;
+    };
+  }
+
+  // Area-preserving squish: wider and shorter, then back, with a tiny hop.
+  // Tab motion lives on the separate scale/translate properties, never on
+  // `transform`: that one belongs to the bar's slide-in transition, and
+  // stacking animations on it left tabs painted half-slid off the top.
+  // Both squishes are additive, so a press and a hover multiply together.
+  function auraImpulse(pill) {
+    const frames = [];
+    for (let step = 0; step <= 60; step++) {
+      const t = step / 60;
+      const deformation = step === 60 ? 0 : -0.05 * Math.exp(-4.6 * t) * Math.sin(11 * t);
+      const x = 1 + deformation;
+      frames.push({ offset: t, scale: `${x} ${1 / x}`, translate: `0 ${-deformation * 28}px` });
+    }
+    return pill.animate(frames, { duration: AURA_DURATION, easing: "linear", fill: "both", composite: "add" });
+  }
+
+  function auraBounce(pill) {
+    aura.pill = pill;
+    const animation = auraImpulse(pill);
+    aura.pillAnimation = animation;
+    animation.onfinish = () => { if (aura.pillAnimation === animation) auraReleasePill(); };
+  }
+
+  function auraReleasePill() {
+    aura.pillAnimation?.cancel();
+    aura.pillAnimation = null;
+    aura.pill = null;
+  }
+
+  function auraPress(pill) {
+    aura.presses.get(pill)?.cancel();
+    aura.presses.delete(pill);
+    if (auraReduced.matches || !animationsAllowed()) return;
+    const animation = auraImpulse(pill);
+    aura.presses.set(pill, animation);
+    animation.onfinish = () => {
+      if (aura.presses.get(pill) !== animation) return;
+      animation.cancel();
+      aura.presses.delete(pill);
+    };
+  }
+
+  // Hover: the tab grows a little (more in height) on a soft spring with a
+  // squash; leaving springs it back.
+  function auraHover(pill, entered) {
+    const previous = aura.hovers.get(pill);
+    if (previous?.entered === entered) return;
+    let cx = 1, cy = 1;
+    if (previous?.animation) {
+      const timing = previous.animation.effect.getComputedTiming();
+      const frame = previous.frames[Math.round((timing.progress ?? 1) * 60)] || previous.frames[60];
+      cx = frame.sx; cy = frame.sy;
+      previous.animation.cancel();
+    } else if (previous?.entered) { cx = 1.018; cy = 1.075; }
+    const x = entered ? 1.018 : 1, y = entered ? 1.075 : 1;
+    const state = { entered, animation: null, frames: [] };
+    aura.hovers.set(pill, state);
+    if (auraReduced.matches || !animationsAllowed()) {
+      if (entered) {
+        state.frames = [{ sx: x, sy: y }];
+        state.animation = pill.animate([{ scale: `${x} ${y}` }], { duration: 0, fill: "forwards", composite: "add" });
+        state.animation.persist();
+      } else aura.hovers.delete(pill);
+      return;
+    }
+    for (let step = 0; step <= 60; step++) {
+      const t = step / 60;
+      const progress = step === 60 ? 1 : 1 - Math.exp(-6 * t) * (Math.cos(10 * t) + 0.6 * Math.sin(10 * t));
+      const squash = step === 60 ? 0 : (entered ? -0.038 : 0.025) * Math.exp(-5 * t) * Math.sin(12 * t);
+      let sx = (cx + (x - cx) * progress) * (1 + squash);
+      let sy = (cy + (y - cy) * progress) / (1 + squash);
+      // Never shrink an entering tab below rest or grow a leaving one again.
+      if (entered) { sx = Math.max(1, sx); sy = Math.max(1, sy); }
+      else { sx = Math.min(cx, sx); sy = Math.min(cy, sy); }
+      state.frames.push({ sx, sy });
+    }
+    const animation = pill.animate(state.frames.map(({ sx, sy }, k) => ({ offset: k / 60, scale: `${sx} ${sy}` })),
+      { duration: entered ? 560 : 640, easing: "linear", fill: "forwards", composite: "add" });
+    state.animation = animation;
+    // A press squish on the same property would otherwise let Firefox drop
+    // the finished hover and snap the tab back to rest while still hovered.
+    if (entered) animation.persist();
+    if (!entered) animation.onfinish = () => {
+      if (aura.hovers.get(pill) !== state) return;
+      animation.cancel();
+      aura.hovers.delete(pill);
+    };
+  }
+
+  function auraSettle() {
+    auraMove(aura.index, true, true);
+    for (const [pill, state] of aura.hovers) { state.animation?.cancel(); if (!state.entered) aura.hovers.delete(pill); }
+    for (const [, animation] of aura.presses) animation.cancel();
+    aura.presses.clear();
+  }
+
+  // Keep the light on the selected tab (instantly when nothing animates).
+  function auraSync() {
+    const index = slotTabs().indexOf(gBrowser.selectedTab);
+    if (index < 0) return;
+    if (aura.index < 0) auraMove(index, true, true);
+    else if (index !== aura.index) auraMove(index);
+  }
+  // Only a real change of the row's width re-places the light (opening the
+  // bar also reports a resize, which must not cut a running move short).
+  let auraRowWidth = 0;
+  new ResizeObserver(() => {
+    const width = slotRow.offsetWidth;
+    if (!width || width === auraRowWidth) return;
+    auraRowWidth = width;
+    if (aura.index >= 0) auraMove(aura.index, true, true);
+  }).observe(slotRow);
+  auraReduced.addEventListener("change", auraSettle);
+  window.addEventListener("deactivate", auraSettle);
+
+  function glideShimmer(samples) {
+    auraMove(Math.round(samples[samples.length - 1]));
   }
 
   // Ctrl+scroll shows the slots from the top while switching, with the
@@ -1898,15 +2053,35 @@
       }));
   }
 
-  const themes = ["system", "light", "dark"];
+  // OLED is dark mode with pure black surfaces (bar, panels, start page).
+  const themes = ["system", "light", "dark", "oled"];
+  const themeNames = { system: "follow system", light: "light", dark: "dark", oled: "OLED (pure black)" };
+  const OLED_SHEET = Services.io.newURI("data:text/css;charset=utf-8," + encodeURIComponent(`
+    @-moz-document regexp("moz-extension://[^/]+/(newtab|manage)\\.html.*") {
+      :root {
+        --background: #000 !important;
+        --field: #0b0b0b !important;
+        --hover: rgba(255, 255, 255, .07) !important;
+        --border: rgba(255, 255, 255, .12) !important;
+        --edge-light: inset 0 1px 0 rgba(255, 255, 255, .06) !important;
+      }
+      html, body { background-color: #000 !important; }
+    }`));
   function applyTheme(theme) {
+    if (!themes.includes(theme)) theme = "system";
     if (theme === "system") {
       Services.prefs.clearUserPref("ui.systemUsesDarkTheme");
       Services.prefs.setIntPref("layout.css.prefers-color-scheme.content-override", 2);
     } else {
-      Services.prefs.setIntPref("ui.systemUsesDarkTheme", theme === "dark" ? 1 : 0);
-      Services.prefs.setIntPref("layout.css.prefers-color-scheme.content-override", theme === "dark" ? 0 : 1);
+      const dark = theme === "dark" || theme === "oled";
+      Services.prefs.setIntPref("ui.systemUsesDarkTheme", dark ? 1 : 0);
+      Services.prefs.setIntPref("layout.css.prefers-color-scheme.content-override", dark ? 0 : 1);
     }
+    document.documentElement.setAttribute("still-theme", theme);
+    const sheets = Cc["@mozilla.org/content/style-sheet-service;1"].getService(Ci.nsIStyleSheetService);
+    const registered = sheets.sheetRegistered(OLED_SHEET, sheets.USER_SHEET);
+    if (theme === "oled" && !registered) sheets.loadAndRegisterSheet(OLED_SHEET, sheets.USER_SHEET);
+    else if (theme !== "oled" && registered) sheets.unregisterSheet(OLED_SHEET, sheets.USER_SHEET);
   }
 
   function runUtility() {
@@ -1927,7 +2102,7 @@
       const next = themes[(themes.indexOf(current) + 1) % themes.length];
       Services.prefs.setStringPref(PREF_THEME, next);
       applyTheme(next);
-      showToast(`Appearance: ${next === "system" ? "follow Windows" : next}`);
+      showToast(`Appearance: ${themeNames[next]}`);
     } else if (mode === "tabdock") {
       const next = !dockSlideEnabled();
       Services.prefs.setBoolPref(PREF_DOCK_SLIDE, next);
@@ -1973,6 +2148,234 @@
     state.toastTimer = setTimeout(hideToast, duration);
   }
 
+  // ------------------------------------------------------ download pages
+  // A link that turns out to be a file leaves its new slot empty. That slot
+  // shows the download instead: the file, live progress, and what to do
+  // with it. The page is chrome drawn over the slot's blank browser, so it
+  // slides with the slot and reads the download directly.
+
+  const DOWNLOAD_KEY = "still-download";
+  const downloadPages = new Map();     // tab -> page
+  const arrowPaths = ["M12 4.5v11m-4.5-4.5 4.5 4.5 4.5-4.5"];
+
+  function downloadName(download) {
+    try { return PathUtils.filename(download.target.path); } catch { return "Download"; }
+  }
+
+  function downloadHost(download) {
+    try { return new URL(download.source.url).host || download.source.url; } catch { return download.source?.url || ""; }
+  }
+
+  function bytes(value) {
+    const [amount, unit] = lazy.DownloadUtils.convertByteUnits(Math.max(0, value || 0));
+    return `${amount} ${unit}`;
+  }
+
+  // A blank slot opened just for this file (not a page that started one).
+  function freshTabFor(download) {
+    const id = download.source?.browsingContextId;
+    if (!id) return null;
+    const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browsingContext?.id === id);
+    if (!tab || tab.closing || downloadPages.has(tab)) return null;
+    const browser = tab.linkedBrowser;
+    const blank = !browser.currentURI || browser.currentURI.spec === "about:blank";
+    return blank && !browser.canGoBack ? tab : null;
+  }
+
+  function downloadState(download) {
+    if (download.succeeded) return "done";
+    if (download.error) return download.error.becauseBlocked ? "blocked" : "failed";
+    if (download.canceled) return download.hasPartialData ? "paused" : "canceled";
+    return "running";
+  }
+
+  function buildDownloadPage(tab) {
+    const fileIcon = h("img", { class: "dl-file", alt: "" });
+    const badge = h("span", { class: "dl-badge", "aria-hidden": "true" });
+    const name = h("h1", { class: "dl-name" });
+    const meta = h("p", { class: "dl-meta" });
+    const fill = h("span", { class: "dl-fill" });
+    const bar = h("div", { class: "dl-bar", role: "progressbar", "aria-label": "Download progress" }, fill);
+    const status = h("p", { class: "dl-status" });
+    const actions = h("div", { class: "dl-actions" });
+    const live = h("p", { class: "dl-live", role: "status", "aria-live": "polite" });
+    const root = h("section", { class: "still-download-page", "aria-label": "Download" },
+      h("div", { class: "dl-body" },
+        h("div", { class: "dl-icon" }, fileIcon, badge),
+        name, meta, bar, status, actions, live));
+    fileIcon.addEventListener("error", () => fileIcon.replaceWith(icon(["M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 6.5 20V4a.5.5 0 0 1 .5-.5Z", "M14 3.5V8h4"], "dl-file dl-file-generic")), { once: true });
+    return { tab, root, fileIcon, badge, name, meta, bar, fill, status, actions, live, download: null, kind: "", timeLeft: -1, buttons: "" };
+  }
+
+  function downloadButton(label, run, primary = false) {
+    return h("button", { type: "button", class: primary ? "dl-button primary" : "dl-button", text: label,
+      onclick: () => Promise.resolve().then(run).catch(() => showToast("That did not work. Try again from Downloads.")) });
+  }
+
+  function renderDownloadPage(page) {
+    const download = page.download;
+    if (!download) {
+      page.root.dataset.state = "missing";
+      page.name.textContent = page.missingName || "Download";
+      page.meta.textContent = "This download is no longer in your list.";
+      page.status.textContent = "";
+      page.actions.replaceChildren();
+      return;
+    }
+    const kind = downloadState(download);
+    const fileName = downloadName(download);
+    if (page.name.textContent !== fileName) { page.name.textContent = fileName; page.name.title = download.target.path; }
+    const iconSrc = `moz-icon://${encodeURIComponent(fileName)}?size=64`;
+    if (page.fileIcon.isConnected && page.fileIcon.getAttribute("src") !== iconSrc) page.fileIcon.src = iconSrc;
+    const total = download.hasProgress ? download.totalBytes : 0;
+    page.meta.textContent = [downloadHost(download), total ? bytes(total) : ""].filter(Boolean).join(" · ");
+    page.root.dataset.state = kind;
+    const known = download.hasProgress && download.totalBytes > 0;
+    page.bar.classList.toggle("indeterminate", kind === "running" && !known);
+    const progress = kind === "done" ? 1 : known ? download.currentBytes / download.totalBytes : 0;
+    page.fill.style.transform = `scaleX(${Math.max(0, Math.min(1, progress))})`;
+    if (known) page.bar.setAttribute("aria-valuenow", String(Math.round(progress * 100)));
+    else page.bar.removeAttribute("aria-valuenow");
+
+    let text = "";
+    if (kind === "running") {
+      if (!download.currentBytes) text = "Starting download";
+      else {
+        const parts = [known ? `${Math.floor(progress * 100)}%` : "", known ? lazy.DownloadUtils.getTransferTotal(download.currentBytes, download.totalBytes) : `${bytes(download.currentBytes)} so far`];
+        if (download.speed > 0) parts.push(`${bytes(download.speed)}/s`);
+        if (known && download.speed > 0) {
+          const [left, last] = lazy.DownloadUtils.getTimeLeft((download.totalBytes - download.currentBytes) / download.speed, page.timeLeft);
+          page.timeLeft = last;
+          parts.push(left);
+        }
+        text = parts.filter(Boolean).join(" · ");
+      }
+    } else if (kind === "done") {
+      let folder = "";
+      try { folder = PathUtils.filename(PathUtils.parent(download.target.path)); } catch {}
+      text = folder ? `Saved in ${folder}` : "Saved";
+    } else if (kind === "paused") {
+      text = known ? `Paused at ${lazy.DownloadUtils.getTransferTotal(download.currentBytes, download.totalBytes)}` : `Paused at ${bytes(download.currentBytes)}`;
+    } else if (kind === "canceled") {
+      text = "Canceled";
+    } else if (kind === "blocked") {
+      text = "Firefox blocked this file because it may be harmful.";
+    } else {
+      text = "Couldn't finish the download. Check your connection, then try again.";
+    }
+    if (page.status.textContent !== text) page.status.textContent = text;
+
+    // Rebuild the buttons only when the set changes, so a click never lands
+    // on a button that was swapped out under the pointer.
+    const set = `${kind}|${download.hasPartialData}`;
+    if (page.buttons !== set) {
+      page.buttons = set;
+      const buttons = [];
+      if (kind === "done") {
+        buttons.push(downloadButton("Open", () => download.launch(), true));
+        buttons.push(downloadButton("Show in folder", () => download.showContainingDirectory()));
+      } else if (kind === "running") {
+        if (download.hasPartialData) buttons.push(downloadButton("Pause", () => download.cancel()));
+        buttons.push(downloadButton("Cancel", async () => { await download.cancel(); await download.removePartialData(); }));
+      } else if (kind === "paused") {
+        buttons.push(downloadButton("Resume", () => download.start(), true));
+        buttons.push(downloadButton("Cancel", () => download.removePartialData()));
+      } else if (kind === "canceled" || kind === "failed") {
+        buttons.push(downloadButton(kind === "failed" ? "Try again" : "Download again", () => download.start(), true));
+      }
+      page.actions.replaceChildren(...buttons);
+    }
+    if (page.kind !== kind) {
+      if (page.kind) page.live.textContent = { done: `${fileName} downloaded`, failed: `${fileName} failed`, blocked: `${fileName} blocked`, paused: "Paused", canceled: "Canceled", running: "Downloading" }[kind];
+      page.kind = kind;
+      page.badge.replaceChildren(kind === "running" ? icon(arrowPaths) : kind === "done" ? icon(["M6.5 12.5l3.5 3.5 7.5-8"]) : kind === "paused" ? icon(["M9.5 7.5v9M14.5 7.5v9"]) : icon(["M12 7v6.5M12 16.8v.2"]));
+    }
+    if (syncDownloadTitle(page)) queueRender();
+  }
+
+  // The slot's title follows the file name.
+  function syncDownloadTitle(page) {
+    const title = page.download ? downloadName(page.download) : page.missingName || "Download";
+    if (page.tab.stillDownloadTitle === title) return false;
+    page.tab.stillDownloadTitle = title;
+    return true;
+  }
+
+  function mountDownloadPage(page) {
+    const stack = page.tab.linkedBrowser?.closest(".browserStack");
+    if (!stack || page.root.parentNode === stack) return;
+    stack.append(page.root);
+  }
+
+  function showDownloadPage(tab, download, missingName = "") {
+    let page = downloadPages.get(tab);
+    if (!page) {
+      page = buildDownloadPage(tab);
+      downloadPages.set(tab, page);
+    }
+    page.download = download;
+    page.missingName = missingName;
+    tab.stillDownload = page;
+    renderDownloadPage(page);
+    mountDownloadPage(page);
+    if (download) {
+      try {
+        window.SessionStore?.setCustomTabValue(tab, DOWNLOAD_KEY, JSON.stringify({ url: download.source.url, path: download.target.path }));
+      } catch {}
+    }
+    if (state.overflow?.tab === tab) state.overflow.update();
+    queueRender();
+  }
+
+  function removeDownloadPage(tab) {
+    const page = downloadPages.get(tab);
+    if (!page) return;
+    downloadPages.delete(tab);
+    page.root.remove();
+    delete tab.stillDownload;
+    delete tab.stillDownloadTitle;
+    try { window.SessionStore?.deleteCustomTabValue(tab, DOWNLOAD_KEY); } catch {}
+    queueRender();
+  }
+
+  async function watchDownloads() {
+    const list = await lazy.Downloads.getList(lazy.Downloads.ALL);
+    let replaying = true;
+    const known = [];
+    await list.addView({
+      onDownloadAdded(download) {
+        if (replaying) { known.push(download); return; }
+        const tab = freshTabFor(download);
+        if (tab) showDownloadPage(tab, download);
+      },
+      onDownloadChanged(download) {
+        for (const page of downloadPages.values()) if (page.download === download) renderDownloadPage(page);
+      },
+      onDownloadRemoved(download) {
+        for (const page of downloadPages.values()) {
+          if (page.download === download) { page.missingName = downloadName(download); page.download = null; renderDownloadPage(page); }
+        }
+      }
+    });
+    replaying = false;
+    // A link that started Still may have begun its download before this.
+    for (const download of known) {
+      if (download.stopped || Date.now() - download.startTime > 30000) continue;
+      const tab = freshTabFor(download);
+      if (tab) showDownloadPage(tab, download);
+    }
+    // Slots that showed a download before a restart show it again.
+    for (const tab of gBrowser.tabs) {
+      let saved = null;
+      try { saved = JSON.parse(window.SessionStore?.getCustomTabValue(tab, DOWNLOAD_KEY) || "null"); } catch {}
+      if (!saved?.path || downloadPages.has(tab)) continue;
+      const download = known.find((item) => item.target.path === saved.path && item.source.url === saved.url) || null;
+      let name = "";
+      try { name = PathUtils.filename(saved.path); } catch {}
+      showDownloadPage(tab, download, name);
+    }
+  }
+
   // --------------------------------------------------- five-slot limit
   // Firefox may open a sixth tab (links, window.open, other apps). The tab is
   // kept so opener relationships survive; Still then reuses an empty home
@@ -1996,7 +2399,7 @@
     }
     state.overflow = { tab: newTab };
     const update = () => {
-      const url = displayUrl(tabUrl(newTab)) || newTab.label || "New page";
+      const url = newTab.stillDownloadTitle ? `Download: ${newTab.stillDownloadTitle}` : displayUrl(tabUrl(newTab)) || newTab.label || "New page";
       replacementUrl.textContent = url;
       replacementUrl.title = url;
     };
@@ -2024,13 +2427,12 @@
     hideOverflowDialog();
     const { tab } = overflow;
     if (tab.closing) return;
-    const index = replacedTab._tPos;
+    if (replacedTab.closing || !gBrowser.tabs.includes(replacedTab)) { showOverflow(tab); return; }
     const direction = Math.sign(slotIndex(replacedTab) - slotIndex(gBrowser.selectedTab));
-    gBrowser.moveTabTo(tab, { tabIndex: index, forceUngrouped: true });
-    if (gBrowser.selectedTab === replacedTab || gBrowser.selectedTab !== tab) {
-      state.nextDirection = direction;
-      gBrowser.selectedTab = tab;
-    }
+    // The new page takes the chosen slot's place, then that slot closes.
+    gBrowser.moveTabTo(tab, { tabIndex: tabPos(replacedTab), forceUngrouped: true });
+    state.nextDirection = direction;
+    gBrowser.selectedTab = tab;
     closeSlot(replacedTab);
   }
 
@@ -2039,7 +2441,9 @@
     if (!overflow) return;
     state.overflow = null;
     hideOverflowDialog();
+    const download = overflow.tab.stillDownload?.download;
     closeOverflowTab(overflow.tab);
+    if (download && !download.stopped) showToast(`${downloadName(download)} keeps downloading. It is in Downloads.`);
   }
 
   replacementCancel.addEventListener("click", cancelOverflow);
@@ -2055,7 +2459,7 @@
     if (tabs.length <= SLOT_COUNT) return;
     const home = tabs.find((candidate) => candidate !== tab && isHomeTab(candidate));
     if (home) {
-      gBrowser.moveTabTo(tab, { tabIndex: home._tPos, forceUngrouped: true });
+      gBrowser.moveTabTo(tab, { tabIndex: tabPos(home), forceUngrouped: true });
       const wasSelected = gBrowser.selectedTab === home;
       if (wasSelected) gBrowser.selectedTab = tab;
       gBrowser.removeTab(home, { animate: false });
@@ -2063,6 +2467,18 @@
     }
     showOverflow(tab);
   }
+
+  // With every slot taken, a new page (a link from another app, a link that
+  // opens a new tab) loads in the background, so the page you are on stays
+  // put until you pick the slot it replaces. Free slots behave as before.
+  const originalAddTab = gBrowser.addTab;
+  gBrowser.addTab = function stillAddTab(uri, options = {}) {
+    if (state.restored && !state.bypassLimit && !options?.inBackground && !options?.createLazyBrowser) {
+      const tabs = slotTabs();
+      if (tabs.length >= SLOT_COUNT && !tabs.some(isHomeTab)) options = { ...options, inBackground: true };
+    }
+    return originalAddTab.call(this, uri, options);
+  };
 
   // Ctrl+T and the new-tab command respect the slot limit up front.
   const originalOpenTab = BrowserCommands.openTab.bind(BrowserCommands);
@@ -2106,6 +2522,7 @@
   gBrowser.tabContainer.addEventListener("TabOpen", handleTabOpen);
   gBrowser.tabContainer.addEventListener("TabSelect", (event) => {
     if (state.editingTab && state.editingTab !== gBrowser.selectedTab) finishEdit();
+    if (gBrowser.selectedTab.stillDownload) mountDownloadPage(gBrowser.selectedTab.stillDownload);
     hideUtilityPanel();
     queueRender();
     window.requestAnimationFrame(placeShimmerAnchors);
@@ -2113,6 +2530,7 @@
   gBrowser.tabContainer.addEventListener("TabClose", (event) => {
     const tab = event.target;
     if (state.overflow?.tab === tab) { state.overflow = null; hideOverflowDialog(); }
+    removeDownloadPage(tab);
     if (state.editingTab === tab) state.editingTab = null;
     if (state.vertical?.tab === tab) finishVertical(true);
     if (state.strip?.panels.includes(panelOf(tab))) finishSlide();
@@ -2123,6 +2541,8 @@
     onLocationChange(browser, webProgress, request, location, flags) {
       if (!webProgress.isTopLevel) return;
       if (state.overflow && browser === state.overflow.tab.linkedBrowser) state.overflow.update();
+      const tab = gBrowser.getTabForBrowser(browser);
+      if (tab?.stillDownload && location?.spec !== "about:blank") removeDownloadPage(tab);
       if (browser === gBrowser.selectedBrowser && !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)) {
         queueRender();
       }
@@ -2238,6 +2658,7 @@
     releaseDock,
     state,
     captureBrowser,
+    applyTheme,
     replaySplash: () => runSplash({ force: true }),
     runImport
   };
@@ -2248,6 +2669,7 @@
   (window.SessionStore?.promiseAllWindowsRestored || Promise.resolve()).then(() => {
     state.restored = true;
     queueRender();
+    watchDownloads().catch(console.error);
     // Once, when Still has settled and you are not busy with it.
     setTimeout(() => window.requestIdleCallback(() => firstRunImport().catch(console.error), { timeout: 10000 }), 6000);
   });

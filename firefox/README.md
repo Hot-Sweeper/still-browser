@@ -78,8 +78,10 @@ Rules that keep it that way:
   the video frame through the CPU).
 - Nothing copies a video frame with a 2D canvas or `-moz-element`: in Firefox
   each copy of a hardware-decoded frame goes through the CPU (10 ms or more at
-  1080p). The YouTube edge fill uses WebGL, which takes the frame on the GPU
-  (about 0.2 ms per frame, 144 fps on a 1080p video).
+  1080p). The YouTube edge fill uses WebGL and uploads each newly presented video
+  frame once, gated by the native presented-frame counter. It samples during
+  the paint cycle without uploading a 24/30 fps frame again on every 144 Hz
+  display refresh.
 - Neighbouring slots and hovered slots are warmed so their first paint is ready
   before the switch.
 
@@ -125,8 +127,8 @@ the same spring as the page strip.
 - Watch pages hide recommendations (beside and under the video, the
   fullscreen grid, the pause overlay and the end-screen wall). A playlist or
   live chat keeps its column.
-- The edge fill draws the video into the gutters around it with WebGL, every
-  display frame while playing, so the edges show the same frame as the video.
+- Playback always uses the native video surface. Live mirrored edges are an
+  optional GPU effect, disabled by default.
 - The home page has a History view (YouTube's own watch history, with watch
   progress). Channel feeds are cached across restarts, shown at once, and
   refreshed in the background only from the home page, six requests at a time.
@@ -191,7 +193,9 @@ npm run firefox:run
 
 The Linux runtime and profile live under `$XDG_DATA_HOME/still`, defaulting to
 `~/.local/share/still`. Runtime executables, permissions and distro library
-symlinks are preserved. Still Search uses its native Linux executable. Windows
+symlinks are preserved. Still Search uses its native Linux executable. Linux uses a private `still` executable as well as the `still` app ID and a separate remote-command namespace,
+so the taskbar groups them under Still and links reach the existing Still
+process even when Firefox is also running. Windows
 icon APIs remain gated; page actors handle gestures inside Firefox on Wayland.
 `node firefox/tools/create-shortcut.js --remove` removes the Linux desktop entry.
 
@@ -203,3 +207,94 @@ checks. Never attach the UI automation harness to a personal profile.
 The runtime is a private copy. After a system Firefox security update, close
 Still, remove only its runtime `.still-runtime-complete` marker, and rerun the
 launcher to refresh the runtime. Never remove the profile to update Firefox.
+
+Unchanged launches do not recopy the window layer or invalidate Firefox's
+compiled startup caches. The installer hashes the deployable Still files and
+only installs and purges caches when those inputs change.
+
+`npm run firefox:check-linux-launch` uses a disposable profile and test runtime
+to check Linux identity, startup, repeated-launch link routing and cache reuse.
+On KDE it also checks Plasma’s actual task model with `qml6`, including the
+application name and launcher association.
+It does not attach automation to the personal profile.
+
+### Scrolling
+
+Middle-button hold/drag and click-to-latch use Firefox's native autoscroll,
+including nested scroll containers. Still enables `general.autoScroll` and
+disables Linux selection paste (`middlemouse.paste`) so it does not steal that
+gesture. Smooth scrolling and APZ autoscroll are enabled as defaults; user
+preferences still win. Display refresh remains automatic, with no forced FPS
+or graphics-driver overrides.
+
+The page actor's Ctrl+wheel listener is passive. Firefox's native Ctrl+wheel
+action is already disabled, so ordinary wheel input does not need to wait for
+Still on the content thread. YouTube action-row discovery is coalesced to one
+animation frame and ignores mutations inside Still's own controls.
+
+`npm run firefox:check-scrolling` checks native autoscroll, nested wheel
+scrolling, Ctrl+wheel slot switching, and YouTube video-frame scheduling and
+pause/cleanup on local fixtures using a disposable profile. WebDriver targets
+content rather than native popup events, so the check cancels autoscroll via
+Firefox's native browser API; physical mouse-release behavior needs a manual
+check.
+
+Still enables Firefox's native mass-spring-damper wheel physics to preserve
+velocity between notches. APZ samples the motion at the display's vsync cadence;
+`layout.frame_rate` stays automatic so lower-refresh displays and idle windows
+do not waste work. The YouTube feed's search, mode controls and shelves use
+solid tints instead of backdrop blur to avoid extra render passes while scrolling.
+
+`npm run firefox:check-refresh` scrolls Still's actual YouTube home UI with
+200 cards and local thumbnails. It records content animation intervals and
+compositor frame intervals, checking both against the detected monitor refresh
+rate. This is a local rendering workload, not a guarantee for arbitrary live
+website scripts or network activity.
+
+### Native watch-page playback
+
+The native video element always supplies the picture. Still does not cover it
+with a canvas, duplicate its decoder, or resample the main picture through
+WebGL. The shared picture/edge renderer was removed because it added work and
+could reduce playback frame rate.
+
+Live mirrored edges are now off by default. The one-time
+`still-youtube-native-playback-v1` migration also disables the earlier saved
+edge default while retaining other Player Lab settings. After that migration,
+an explicit opt-in is preserved. Player Lab labels this effect as extra GPU work.
+
+If enabled, optional decoration stays below the native video, is capped at
+1920 pixels/1x CSS resolution, and stops uploading only when offscreen, hidden or paused.
+Live edges keep updating during scrolling, gated by video frame changes. It never replaces the picture. Perfect synchronization between separate
+video/canvas
+surfaces is not guaranteed; playback performance takes precedence.
+
+Player time/control and comment mutations do not trigger broad page scans.
+The home helper skips watch-page mutations. Native smooth scrolling, spring
+physics and middle-button autoscroll remain enabled.
+
+`npm run firefox:check-watch-refresh` checks a decoded 1080p60 fixture with all
+three YouTube helpers. It verifies native video cadence/dropped frames, zero
+WebGL contexts and texture uploads by default, no repeated playback/comment
+scans, scroll frame pacing, migration of old saved settings, and explicit
+optional edge opt-in/opt-out and live updates during scrolling. This local
+workload does not cover all live YouTube codecs, quality levels or third-party scripts.
+
+### YouTube first paint
+
+The custom home shell is a declarative MAIN-world document-start script. It
+mounts as soon as body exists, before DOMContentLoaded and slow resources, with
+its own loading cards until cached channel data arrives. A small route-aware
+user-origin stylesheet suppresses native feed/toolbars before the first paint.
+The filter and player UI initialize at document_end instead of waiting for the
+full page-load event. Cached configuration is hydrated independently, without
+reinjecting all three scripts on every update.
+
+The first-paint guard follows native SPA navigation and feed-mode changes,
+allows native-only pages/dialogs, and has a three-second fallback if the shell
+fails to mount. It never hides the native video surface during playback.
+
+`npm run firefox:check-youtube-startup` installs a temporary copy of the actual
+extension with local URL matches. Slow scripts/images and a strict page CSP
+exercise pre-page-script bootstrap, no original-feed exposure, early custom
+rendering, SPA route changes, normal-mode routes and failed-shell recovery.

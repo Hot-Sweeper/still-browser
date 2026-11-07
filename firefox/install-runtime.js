@@ -3,10 +3,12 @@
 // The original runtime folder is never modified.
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 
 const root = path.resolve(__dirname, '..');
 const windows = process.platform === 'win32';
-const executableName = windows ? 'firefox.exe' : 'firefox';
+const sourceExecutableName = windows ? 'firefox.exe' : 'firefox';
+const executableName = windows ? 'firefox.exe' : 'still';
 const dataRoot = path.join(process.env.XDG_DATA_HOME || path.join(require('node:os').homedir(), '.local', 'share'), 'still');
 const prototypeRoot = windows ? path.join(path.parse(root).root, 'Still Firefox Prototype', 'runtime') : path.join(dataRoot, 'runtime');
 const sourceRuntime = process.env.STILL_FIREFOX_SOURCE_RUNTIME || (windows ? path.join(prototypeRoot, 'core') : '/usr/lib/firefox');
@@ -24,7 +26,7 @@ function copyFile(source, target) {
     if (!windows) fs.chmodSync(target, fs.statSync(source).mode & 0o777);
   } catch (error) {
     const same = fs.existsSync(target) && fs.statSync(target).size === fs.statSync(source).size;
-    if (!same || !['EPERM', 'EBUSY'].includes(error.code)) {
+    if (!same || !['EPERM', 'EBUSY', 'ETXTBSY'].includes(error.code)) {
       throw new Error(`Could not update ${target} (${error.code}). Close Still and try again.`);
     }
   }
@@ -58,19 +60,44 @@ function syncDirectory(from, to, keep = []) {
   }
 }
 
+// Hash only deployable Still inputs, not the large Firefox engine or sidecar.
+// An unchanged launch must preserve Firefox's compiled startup caches.
+function layerVersion() {
+  const hash = createHash('sha256');
+  function add(file) {
+    hash.update(path.relative(root, file));
+    if (!fs.existsSync(file)) { hash.update('missing'); return; }
+    if (fs.statSync(file).isDirectory()) {
+      for (const name of fs.readdirSync(file).sort()) add(path.join(file, name));
+    } else hash.update(fs.readFileSync(file));
+  }
+  for (const file of [__filename, chromeSource, path.join(__dirname, 'build'),
+    path.join(root, 'src', 'assets', 'still-icon.png'), path.join(root, 'build', 'icon.ico'),
+    path.join(root, 'build', 'searxng-sidecar', 'still-build.json')]) add(file);
+  return hash.digest('hex');
+}
+
 function install(runtime = userRuntime) {
+  let engineInstalled = false;
   if (!fs.existsSync(path.join(runtime, '.still-runtime-complete'))) {
-    if (!fs.existsSync(path.join(sourceRuntime, executableName))) {
+    if (!fs.existsSync(path.join(sourceRuntime, sourceExecutableName))) {
       throw new Error(`Firefox runtime not found: ${sourceRuntime}`);
     }
     console.log(`Copying Firefox runtime to ${runtime}`);
     copyDirectory(sourceRuntime, runtime);
     fs.writeFileSync(path.join(runtime, '.still-runtime-complete'), '1\n');
+    engineInstalled = true;
   }
+  const version = layerVersion();
+  const versionFile = path.join(runtime, '.still-layer-version');
+  if (!engineInstalled && fs.existsSync(versionFile) && fs.readFileSync(versionFile, 'utf8') === version) return runtime;
   fs.rmSync(path.join(runtime, 'autoconfig-ok.txt'), { force: true });
   fs.mkdirSync(path.join(runtime, 'defaults', 'pref'), { recursive: true });
   fs.copyFileSync(path.join(chromeSource, 'still-autoconfig.js'), path.join(runtime, 'defaults', 'pref', 'still-autoconfig.js'));
   fs.copyFileSync(path.join(chromeSource, 'still.cfg'), path.join(runtime, 'still.cfg'));
+  // Plasma also matches the executable basename, before the Wayland app ID.
+  // Use a real Still executable (a symlink still resolves to firefox in /proc).
+  if (!windows) copyFile(path.join(runtime, sourceExecutableName), path.join(runtime, executableName));
   const target = path.join(runtime, 'still-chrome');
   // Never delete files under a running Still: files are overwritten in place,
   // and only files that no longer exist in the source are removed.
@@ -91,6 +118,7 @@ function install(runtime = userRuntime) {
   // Window and taskbar icon, applied by StillShared.sys.mjs.
   const icon = path.join(root, 'build', 'icon.ico');
   if (fs.existsSync(icon)) fs.copyFileSync(icon, path.join(target, 'still.ico'));
+  fs.writeFileSync(versionFile, version);
   console.log(`Installed Still window layer in ${runtime}`);
   return runtime;
 }

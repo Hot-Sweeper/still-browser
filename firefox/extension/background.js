@@ -186,11 +186,19 @@ async function currentChannels() {
 }
 
 async function inject(tabId, config) {
-  await browser.scripting.executeScript({
+  const applied = await browser.scripting.executeScript({
     target: { tabId }, world: 'MAIN',
-    func: (nextConfig) => { window.__stillLearningFilterConfig = nextConfig; },
+    func: (nextConfig) => {
+      window.__stillLearningFilterConfig = nextConfig;
+      window.__stillLearningFilter?.update(nextConfig);
+      window.__stillYouTubeHome?.update(nextConfig);
+      // Declarative scripts will run as the DOM becomes ready. Only fall
+      // back to file injection for pages open before extension registration.
+      return document.readyState === 'loading' || Boolean(window.__stillLearningFilter && window.__stillYouTubeHome && window.__stillDownloadUi);
+    },
     args: [config]
   });
+  if (applied[0]?.result) return;
   for (const file of YOUTUBE_FILES) {
     await browser.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: [file] });
   }
@@ -226,7 +234,7 @@ async function refreshTab(tabId, url) {
 }
 
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (change.status === 'complete' && YOUTUBE_URL.test(tab.url || '')) {
+  if ((change.status === 'loading' || change.status === 'complete') && YOUTUBE_URL.test(tab.url || '')) {
     refreshTab(tabId, tab.url).catch(console.error);
   }
 });
@@ -238,7 +246,8 @@ browser.storage.onChanged.addListener(async (changes, area) => {
 });
 
 browser.action.onClicked.addListener(() => browser.runtime.openOptionsPage());
-browser.runtime.onMessage.addListener((message) => {
+browser.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === 'youtube-ready' && sender.tab?.id && YOUTUBE_URL.test(sender.url || '')) return refreshTab(sender.tab.id, sender.url);
   if (message?.type === 'open-manager') return browser.runtime.openOptionsPage();
   if (message?.type === 'get-catalog') return currentChannels();
   if (message?.type === 'history-search' && typeof message.text === 'string') {

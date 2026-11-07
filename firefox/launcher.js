@@ -4,22 +4,40 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { install, executableName, dataRoot } = require('./install-runtime');
+const { install, runtime: installedRuntime, executableName, dataRoot } = require('./install-runtime');
+const { browserArgs, browserEnv } = require('./identity');
 
 const root = path.resolve(__dirname, '..');
 const prototypeRoot = path.join(path.parse(root).root, 'Still Firefox Prototype');
 const profile = process.env.STILL_FIREFOX_PROFILE || (process.platform === 'win32' ? path.join(prototypeRoot, 'profile') : path.join(dataRoot, 'profile'));
 
+// Firefox marks a profile in use with a `lock` link naming the owner's pid.
+function stillIsRunning() {
+  if (process.platform === 'win32') return false;
+  try {
+    const pid = Number(fs.readlinkSync(path.join(profile, 'lock')).split('+').pop());
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
 async function main() {
   if (!fs.existsSync(path.join(__dirname, 'build', 'manifest.json'))) {
     throw new Error('Run npm run firefox:build before launching Still on Firefox.');
   }
-  const runtime = install();
+  // A running Still only needs the link handed over. Updating its files now
+  // would fail on its busy executable and drop the link; the update installs
+  // on the next start instead.
+  const runtime = stillIsRunning() && fs.existsSync(path.join(installedRuntime, executableName)) ? installedRuntime : install();
   fs.mkdirSync(profile, { recursive: true });
 
   console.log(`Profile: ${profile}`);
-  const child = spawn(path.join(runtime, executableName), ['-profile', profile, '--wait-for-browser', ...process.argv.slice(2)], {
+  const child = spawn(path.join(runtime, executableName), [...browserArgs(), '-profile', profile, '--wait-for-browser', ...process.argv.slice(2)], {
     cwd: runtime,
+    env: browserEnv(),
     stdio: 'inherit'
   });
   let stopping = false;

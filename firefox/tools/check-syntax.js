@@ -12,4 +12,7 @@ for (const file of ['still.cfg', 'still-autoconfig.js', 'content/still-window.js
 for (const file of fs.readdirSync(path.join(dir, 'content')).filter((name) => name.endsWith('.mjs'))) {
   execFileSync(process.execPath, ['--check', path.join(dir, 'content', file)], { stdio: 'inherit' });
 }
+for (const file of ['launcher.js', 'identity.js', 'install-runtime.js', 'tools/create-shortcut.js', 'tools/session.js', 'tools/check-linux-launch.js', 'tools/check-scrolling.js', 'tools/check-refresh.js', 'tools/check-watch-refresh.js', 'tools/check-youtube-startup.js']) {
+  execFileSync(process.execPath, ['--check', path.join(__dirname, '..', file)], { stdio: 'inherit' });
+}
 console.log('Still Firefox layer: syntax OK');

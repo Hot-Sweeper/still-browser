@@ -81,7 +81,8 @@ export class StillPageChild extends JSWindowActorChild {
         break;
       case "wheel": {
         if (!event.ctrlKey || event.metaKey || !event.deltaY) break;
-        event.preventDefault();
+        // Native Ctrl+wheel is disabled in still.cfg. Keep this passive so
+        // normal wheel scrolling stays on the compositor.
         // Lines and pages count as whole notches; pixel deltas (touchpads,
         // smooth wheels) add up until they make one.
         const now = event.timeStamp;

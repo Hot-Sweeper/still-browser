@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Marionette } = require('./marionette');
-const { install, testRuntime } = require('../install-runtime');
+const { install, testRuntime, executableName } = require('../install-runtime');
+const { browserArgs, browserEnv } = require('../identity');
 
 const extensionDir = path.join(__dirname, '..', 'build');
 
@@ -22,14 +23,16 @@ async function launch({ profile, port = 2828 + Math.floor(Math.random() * 500), 
     // Test windows sit behind other apps; keep them painting and playing.
     'user_pref("widget.windows.window_occlusion_tracking.enabled", false);',
     'user_pref("media.autoplay.default", 0);',
+    // Checks never make sound; the personal profile keeps its own volume.
+    ...(disposable ? ['user_pref("media.volume_scale", "0.0");'] : []),
     // The first-start imports copy and read large databases; only the import
     // checks want them.
     ...(imports ? [] : ['user_pref("still.import.electron.done", true);', 'user_pref("still.import.history.done", true);'])
   ].join('\n'));
-  const child = spawn(path.join(runtime, 'firefox.exe'), [
-    '-no-remote', '-profile', profileDir, '--marionette', '--remote-allow-system-access',
+  const child = spawn(path.join(runtime, executableName), [
+    ...browserArgs(), '-no-remote', '-profile', profileDir, '--marionette', '--remote-allow-system-access',
     ...(headless ? ['--headless'] : []), ...args
-  ], { stdio: 'ignore', windowsHide: false, env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' } });
+  ], { stdio: 'ignore', windowsHide: false, env: { ...browserEnv(), MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' } });
   const marionette = await new Marionette(port).connect(45000);
   await marionette.session();
   if (extension && fs.existsSync(path.join(extensionDir, 'manifest.json'))) {

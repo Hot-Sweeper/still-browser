@@ -23,6 +23,10 @@
     "firefox:run": "node firefox/build.js && node firefox/launcher.js",
     "firefox:shortcut": "node firefox/build.js && node firefox/tools/create-shortcut.js",
     "firefox:check": "node firefox/tools/check-syntax.js && node firefox/build.js && web-ext lint --source-dir firefox/build",
+    "firefox:check-youtube-startup": "node firefox/build.js && node firefox/tools/check-youtube-startup.js",
+    "firefox:check-watch-refresh": "node firefox/build.js && node firefox/tools/check-watch-refresh.js",
+    "firefox:check-refresh": "node firefox/build.js && node firefox/tools/check-refresh.js",
+    "firefox:check-scrolling": "node firefox/build.js && node firefox/tools/check-scrolling.js",
     "firefox:check-ui": "node firefox/build.js && node firefox/tools/check-ui.js bar,slide,vertical,edit,panel,overflow,edge,newtab,dock && node firefox/tools/check-ui.js perf,rapid,glide",
     "build:mouse-helper": "dotnet publish native/mouse-navigation-helper/MouseNavigationHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -p:DebugType=None -p:DebugSymbols=false -o build/mouse-helper",
     "check": "node --check src/main.js && node --check src/renderer.js && node --check src/preload.js && node --check src/start.js && node --check src/start-preload.js && node --check src/editor.js && node --check src/learn.js && node --check src/import-opera-cookies.js && node --check src/import-opera-extensions.js && node --check src/import-opera-history.js && node --check src/download-manager.js && node --check src/youtube-downloader.js && node --check src/youtube-ui.js && node --check src/youtube-filter.js && node --check src/youtube-home.js && node --check src/migrate-opera.js && node --check src/repair-google-session.js && node --check src/default-browser.js && node --check src/searxng.js && node --check scripts/fetch-yt-dlp.js && node --check scripts/build-searxng.js && node --check scripts/package-app.js",
@@ -30,7 +34,8 @@
     "dist": "node scripts/package-app.js",
     "dist:win": "node scripts/package-app.js win32",
     "dist:linux": "node scripts/package-app.js linux",
-    "dist:mac": "node scripts/package-app.js darwin"
+    "dist:mac": "node scripts/package-app.js darwin",
+    "firefox:check-linux-launch": "node firefox/build.js && node firefox/tools/check-linux-launch.js"
   },
   "devDependencies": {
     "electron": "43.4.0",

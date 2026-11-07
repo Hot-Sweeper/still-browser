@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 24;
+  const VERSION = 27;
   const existing = window.__stillYouTubeHome;
   if (existing?.version === VERSION) {
     existing.update(window.__stillLearningFilterConfig || {});
@@ -30,6 +30,7 @@
     musicHomeFeed: { videos: [], failed: [], loading: true }
   };
   let observer;
+  let waitingForBody = !document.body;
   let destroyed = false;
   let renderTimer;
   let renderedSignature = '';
@@ -1535,7 +1536,7 @@
   }
 
   function renderHome() {
-    if (destroyed) return;
+    if (destroyed || !document.body) return;
     clearTimeout(renderTimer);
     if (isHome() && feedMode === 'subscriptions' && subscriptionState === 'idle') loadSubscriptions();
     if (isHome() && feedMode === 'history') loadHistory();
@@ -1693,7 +1694,7 @@
         .still-home-hero-content { position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;width:min(920px,calc(100% - 40px));margin-top:-5vh }
         .still-home-logo { display:block;width:clamp(390px,38vw,720px);text-decoration:none;filter:drop-shadow(0 34px 82px rgba(255,0,51,.15));opacity:.99 }
         .still-home-logo img { display:block;width:100%;height:auto }
-        .still-home-search { display:grid;grid-template-columns:26px minmax(0,1fr) 58px;align-items:center;overflow:hidden;width:min(760px,82vw);height:62px;margin-top:34px;padding-left:20px;border:1px solid rgba(255,255,255,.16);border-radius:31px;background:rgba(10,10,10,.84);box-shadow:0 18px 54px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.055);transition:border-color 160ms ease,background-color 160ms ease,box-shadow 180ms ease;backdrop-filter:blur(18px) }
+        .still-home-search { display:grid;grid-template-columns:26px minmax(0,1fr) 58px;align-items:center;overflow:hidden;width:min(760px,82vw);height:62px;margin-top:34px;padding-left:20px;border:1px solid rgba(255,255,255,.16);border-radius:31px;background:rgba(10,10,10,.96);box-shadow:0 18px 54px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.055);transition:border-color 160ms ease,background-color 160ms ease,box-shadow 180ms ease;backdrop-filter:none }
         .still-home-search:hover { border-color:rgba(255,255,255,.26);background:rgba(14,14,14,.91) }
         .still-home-search:focus-within { border-color:#3ea6ff;background:#0d0d0d;box-shadow:0 18px 54px rgba(0,0,0,.5),0 0 0 1px rgba(62,166,255,.24) }
         .still-home-search-icon { width:23px;height:23px;fill:none;stroke:#aaa;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;transition:stroke 150ms ease }
@@ -1704,7 +1705,7 @@
         .still-home-search button { display:grid;place-items:center;align-self:stretch;width:58px;margin:0;padding:0;border:0;border-left:1px solid rgba(255,255,255,.12);border-radius:0;color:#e9e9e9;background:#202020;cursor:pointer;transition:background-color 140ms ease,color 140ms ease }
         .still-home-search button:hover { color:#fff;background:#2b2b2b }.still-home-search button:focus-visible { outline:2px solid #3ea6ff;outline-offset:-4px }
         .still-home-search button svg { width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round }
-        .still-feed-mode { display:inline-flex;align-items:center;gap:3px;margin-top:18px;padding:4px;border:1px solid rgba(255,255,255,.12);border-radius:22px;background:rgba(12,12,12,.82);box-shadow:0 12px 34px rgba(0,0,0,.34);font-family:Roboto,Arial,sans-serif;backdrop-filter:blur(16px) }
+        .still-feed-mode { display:inline-flex;align-items:center;gap:3px;margin-top:18px;padding:4px;border:1px solid rgba(255,255,255,.12);border-radius:22px;background:rgba(12,12,12,.96);box-shadow:0 12px 34px rgba(0,0,0,.34);font-family:Roboto,Arial,sans-serif;backdrop-filter:none }
         .still-feed-mode button { min-width:94px;height:34px;padding:0 15px;border:0;border-radius:17px;color:#999;background:transparent;font:500 14px/34px Roboto,Arial,sans-serif;cursor:pointer;transition:color 130ms ease,background-color 130ms ease }
         .still-feed-mode button:hover { color:#f1f1f1;background:rgba(255,255,255,.07) }.still-feed-mode button.selected { color:#0b0b0b;background:#f1f1f1 }.still-feed-mode button:focus-visible { outline:2px solid #3ea6ff;outline-offset:1px }
         .still-feed-mode-native { position:fixed;z-index:2147483400;top:12px;right:92px;margin:0;background:rgba(8,8,8,.92);box-shadow:0 10px 38px rgba(0,0,0,.55);opacity:0;transform:translateY(-7px);transition:opacity 160ms ease,transform 160ms ease }
@@ -1744,7 +1745,7 @@
         .still-edge::before { content:'';position:absolute;top:42%;width:3px;height:84px;border-radius:4px;background:rgba(255,255,255,.13);opacity:.45;transition:opacity 160ms ease }
         .still-edge-left::before { left:4px }.still-edge-right::before { right:4px }
         .still-edge:hover::before,.still-edge:focus-within::before { opacity:0 }
-        .still-shelf { position:absolute;top:18px;bottom:18px;width:min(330px,86vw);padding:24px 14px;border:1px solid rgba(255,255,255,.1);border-radius:18px;background:rgba(14,14,14,.94);box-shadow:0 24px 90px rgba(0,0,0,.8);backdrop-filter:blur(24px);transition:transform 220ms cubic-bezier(.2,.8,.2,1);overflow:auto;scrollbar-width:none }
+        .still-shelf { position:absolute;top:18px;bottom:18px;width:min(330px,86vw);padding:24px 14px;border:1px solid rgba(255,255,255,.1);border-radius:18px;background:rgba(14,14,14,.98);box-shadow:0 24px 90px rgba(0,0,0,.8);backdrop-filter:none;transition:transform 220ms cubic-bezier(.2,.8,.2,1);overflow:auto;scrollbar-width:none }
         .still-shelf::-webkit-scrollbar { display:none }.still-edge-left .still-shelf { left:8px;transform:translateX(calc(-100% - 24px)) }.still-edge-right .still-shelf { right:8px;transform:translateX(calc(100% + 24px)) }
         .still-edge:hover .still-shelf,.still-edge:focus-within .still-shelf { transform:translateX(0) }
         .still-shelf-title { display:block;padding:4px 14px 18px;color:#fff;font-size:22px;font-weight:700;letter-spacing:-.03em }
@@ -1790,7 +1791,7 @@
         .still-channel-corner-home { position:fixed;z-index:2147483150;top:0;left:0;display:grid;place-items:start;width:112px;height:78px;padding:18px 0 0 20px;box-sizing:border-box;overflow:hidden;border-radius:0 0 22px 0;background:transparent;text-decoration:none;cursor:pointer }
         .still-channel-corner-home svg { width:42px;height:30px;opacity:0;filter:none;transform:translate(-10px,-7px) scale(.78);transition:opacity 160ms ease,transform 190ms cubic-bezier(.2,.8,.2,1) }
         .still-channel-corner-home:hover svg,.still-channel-corner-home:focus-visible svg { opacity:1;transform:translate(0,0) scale(1) }.still-channel-corner-home:focus-visible { outline:2px solid #3ea6ff;outline-offset:-5px }
-        .still-channel-avatar-viewer { position:fixed;z-index:2147483600;inset:0;display:grid;place-items:center;padding:48px;background:rgba(0,0,0,.9);backdrop-filter:blur(18px);cursor:zoom-out;animation:still-avatar-in 150ms ease-out }
+        .still-channel-avatar-viewer { position:fixed;z-index:2147483600;inset:0;display:grid;place-items:center;padding:48px;background:rgba(0,0,0,.9);backdrop-filter:none;cursor:zoom-out;animation:still-avatar-in 150ms ease-out }
         .still-channel-avatar-viewer img { display:block;width:min(720px,78vw,78vh);height:min(720px,78vw,78vh);border-radius:50%;object-fit:cover;box-shadow:0 28px 100px rgba(0,0,0,.8) }
         .still-channel-avatar-close { position:fixed;top:24px;right:28px;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;color:#fff;background:#202020;font:300 32px/1 Arial,sans-serif;cursor:pointer }.still-channel-avatar-close:hover { background:#303030 }.still-channel-avatar-close:focus-visible { outline:2px solid #3ea6ff;outline-offset:3px }
         @keyframes still-avatar-in { from { opacity:0 } to { opacity:1 } }
@@ -1832,8 +1833,14 @@
     renderHome();
   }
 
-  observer = new MutationObserver(() => scheduleRender());
+  observer = new MutationObserver(() => {
+    if (waitingForBody && document.body) { waitingForBody = false; renderHome(); return; }
+    // Watch-page playback and comment mutations cannot update a feed which
+    // is not mounted. Route events still handle entering/leaving watch pages.
+    if (isHome() || isSearch() || isChannel()) scheduleRender();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  document.addEventListener('DOMContentLoaded', renderHome, { once: true });
   document.addEventListener('yt-navigate-finish', handleNativeNavigateFinish);
   document.addEventListener('keydown', focusSearchShortcut);
   document.addEventListener('click', handleCustomLinkClick, true);
@@ -1845,6 +1852,7 @@
       destroyed = true;
       clearTimeout(renderTimer);
       observer?.disconnect();
+      document.removeEventListener('DOMContentLoaded', renderHome);
       document.removeEventListener('keydown', focusSearchShortcut);
       document.removeEventListener('yt-navigate-finish', handleNativeNavigateFinish);
       document.removeEventListener('click', handleCustomLinkClick, true);

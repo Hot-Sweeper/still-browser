@@ -6,3 +6,9 @@ window.addEventListener('message', (event) => {
     browser.runtime.sendMessage({ type: 'open-manager' }).catch(() => {});
   }
 });
+
+// Hydrate the already-rendered page from local cached feeds; do not wait for
+// YouTube's images, ads and other subresources to finish loading.
+const notifyYouTubeReady = () => browser.runtime.sendMessage({ type: 'youtube-ready' }).catch(() => {});
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', notifyYouTubeReady, { once: true });
+else notifyYouTubeReady();

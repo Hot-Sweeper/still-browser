@@ -12,7 +12,24 @@
   --still-accent: #555b57;
   --still-shadow: 0 10px 32px rgba(16, 20, 17, 0.15), 0 2px 8px rgba(16, 20, 17, 0.08);
   --still-ease: cubic-bezier(.16, 1, .3, 1);
+  --still-aura-rgb: 128, 150, 137;
+  --still-shine-rgb: 226, 236, 229;
 }
+
+/* OLED: dark mode on pure black. Surfaces are black; a thin light outline
+   keeps the slots readable against black pages. */
+:root[still][still-theme="oled"] {
+  --still-pill: rgba(0, 0, 0, 0.96) !important;
+  --still-pill-strong: rgba(0, 0, 0, 0.98) !important;
+  --still-pill-hover: rgba(16, 16, 16, 0.97) !important;
+  --still-pill-active: rgba(20, 20, 20, 0.98) !important;
+  --still-pill-active-edge: rgba(255, 255, 255, 0.2) !important;
+  --still-line: rgba(255, 255, 255, 0.14) !important;
+  --still-glass-highlight: rgba(255, 255, 255, 0.14) !important;
+  --still-muted: #8d8d8d !important;
+  --still-shadow: 0 0 0 transparent !important;
+}
+:root[still][still-theme="oled"] #still-tab-dock { background: rgba(0, 0, 0, .9) !important; }
 
 @media (prefers-color-scheme: dark) {
   :root[still] {
@@ -25,6 +42,8 @@
     --still-glass-highlight: rgba(255, 255, 255, 0.12);
     --still-accent: #c5cac6;
     --still-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.28);
+    --still-aura-rgb: 195, 217, 205;
+    --still-shine-rgb: 232, 243, 236;
   }
 }
 
@@ -253,8 +272,13 @@
 #still-chrome {
   position: absolute;
   inset: 0 0 auto 0;
-  height: 73px;
-  padding: 18px 194px 10px 14px;
+  --still-toolbar-edge: 16px;
+  --still-toolbar-gap: 8px;
+  --still-toolbar-height: 43px;
+  display: flex;
+  align-items: center;
+  gap: var(--still-toolbar-gap);
+  padding: var(--still-toolbar-edge);
   pointer-events: none;
 }
 
@@ -282,10 +306,12 @@
 }
 
 #still-chrome .slot-row {
-  width: 100%;
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--still-toolbar-gap);
   pointer-events: none;
 }
 
@@ -331,11 +357,11 @@
 #still-chrome .slot {
   position: relative;
   min-width: 0;
-  height: 43px;
+  height: var(--still-toolbar-height);
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 7px 0 10px;
+  padding: 0 10px;
   border-radius: 14px;
   cursor: pointer;
   user-select: none;
@@ -407,29 +433,32 @@
   font-size: 13px;
 }
 
+/* Close: a round button that mirrors the favicon on the other side (same
+   22px box, same 10px inset). Quiet until the slot is current or hovered. */
 #still-chrome .slot-close {
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
   display: grid;
   place-items: center;
   padding: 0;
-  color: var(--still-muted);
+  color: var(--still-text);
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: 50%;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
+  transition: opacity 160ms ease, background-color 160ms ease, transform 120ms ease;
 }
 
-#still-chrome .slot-close svg { width: 14px; height: 14px; }
-#still-chrome .slot:is(:hover, .active, :focus-within) .slot-close { opacity: .72; }
+#still-chrome .slot-close svg { width: 20px; height: 20px; stroke-width: 1.9; }
+#still-chrome .slot.active .slot-close { opacity: .5; }
+#still-chrome .slot:is(:hover, :focus-within) .slot-close { opacity: .7; }
 #still-chrome .slot-close:is(:hover, :focus-visible) {
-  color: var(--still-text);
-  background: color-mix(in srgb, var(--still-text) 9%, transparent);
   opacity: 1;
+  background-color: color-mix(in srgb, var(--still-text) 13%, transparent);
 }
+#still-chrome .slot-close:active { transform: scale(.88); background-color: color-mix(in srgb, var(--still-text) 20%, transparent); }
 
 .slot-editor {
   min-width: 0;
@@ -498,17 +527,16 @@
 /* ------------------------------------------------------- window controls */
 
 .top-controls {
-  position: absolute;
-  top: 18px;
-  right: 14px;
   display: flex;
-  gap: 6px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--still-toolbar-gap);
   pointer-events: none;
 }
 
 #still-chrome .top-control {
-  width: 39px;
-  height: 39px;
+  width: var(--still-toolbar-height);
+  height: var(--still-toolbar-height);
   display: grid;
   place-items: center;
   padding: 0;
@@ -538,6 +566,14 @@
 
 .utility-glyph svg { width: 20px; height: 20px; }
 .utility-glyph .theme-mode-icon .theme-fill { fill: currentColor; stroke: none; }
+/* The icon shows the mode: half (system), empty (light), full (dark), and
+   full with a ring (OLED). */
+.utility-glyph .theme-mode-icon :is(.theme-full, .theme-ring) { display: none; }
+.utility-glyph .theme-mode-icon .theme-full { fill: currentColor; stroke: none; }
+.utility-glyph .theme-mode-icon .theme-ring { stroke-width: 1.4; }
+:root[still-theme="light"] .utility-glyph .theme-mode-icon .theme-fill { display: none; }
+:root:is([still-theme="dark"], [still-theme="oled"]) .utility-glyph .theme-mode-icon .theme-full { display: inline; }
+:root[still-theme="oled"] .utility-glyph .theme-mode-icon .theme-ring { display: inline; }
 .utility-button.bookmarked .utility-glyph svg { fill: currentColor; }
 .utility-button.dock-slide-enabled .tab-dock-mode-icon rect { fill: currentColor; fill-opacity: .22; }
 #still-chrome .utility-button.panel-open { background: var(--still-pill-strong); }
@@ -547,9 +583,9 @@
 .utility-panel {
   position: absolute;
   z-index: 55;
-  top: 66px;
-  right: 148px;
-  width: min(340px, calc(100vw - 28px));
+  top: calc(var(--still-toolbar-edge) + var(--still-toolbar-height) + var(--still-toolbar-gap));
+  right: var(--still-toolbar-edge);
+  width: min(340px, calc(100vw - 2 * var(--still-toolbar-edge)));
   max-height: min(480px, calc(100vh - 90px));
   padding: 7px;
   overflow: auto;
@@ -885,9 +921,8 @@
 .replacement-action { color: var(--still-muted); font-size: 11px; }
 
 @media (max-width: 920px) {
-  #still-chrome { padding-right: 176px; }
+  #still-chrome { --still-toolbar-height: 39px; }
   #still-chrome .slot { padding: 0 6px 0 8px; gap: 7px; }
-  #still-chrome .top-control { width: 35px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1077,25 +1112,94 @@
   initial-value: 0;
 }
 
+@property --still-soul-core {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@property --still-shimmer-tail {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 36px;
+}
+
+@property --still-aura-x { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --still-aura-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --still-aura-sx { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --still-aura-sy { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --still-aura-o { syntax: "<number>"; inherits: true; initial-value: .82; }
+@property --still-soul-headh { syntax: "<percentage>"; inherits: true; initial-value: 170%; }
+@property --still-soul-env { syntax: "<number>"; inherits: true; initial-value: 0; }
+@property --still-soul-bx { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --still-soul-by { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
+@property --still-soul-rx { syntax: "<length>"; inherits: true; initial-value: 60px; }
+@property --still-soul-ry { syntax: "<length>"; inherits: true; initial-value: 30px; }
+@property --still-sheen-x { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
+@property --still-sheen-a { syntax: "<number>"; inherits: true; initial-value: 0; }
+
+@property --still-shimmer-head {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 96px;
+}
+
 #still-chrome .slot-row {
   --still-shimmer-width: 280px;
   --still-shimmer-light: 255, 255, 255;
-  --still-shimmer-strength: .3;
+  --still-shimmer-strength: .38;
   --still-shimmer-angle: 90deg;
-  --still-shimmer-peak: 0.8;
+  --still-shimmer-trail: 1;
   /* Titles: the current slot reads at full strength, the others a step
      back; the band lifts each title to full as it passes. */
   --still-title-rest: rgba(238, 240, 238, .66);
   --still-title-lit: 255, 255, 255;
 }
 
+/* Tab aura (ported from Still's native build): one light travels behind
+   the tabs to the selected one (still-window.js: auraMove). */
+#still-chrome .slot { transition-property: transform, opacity, background-color, border-color, box-shadow; }
 #still-chrome .slot.active {
   --still-glass-tint: var(--still-pill-active);
-  border-color: var(--still-pill-active-edge);
+  border-color: color-mix(in srgb, var(--still-accent) 34%, transparent);
 }
 #still-chrome .slot.active:hover { --still-glass-tint: var(--still-pill-active); }
-#still-chrome .slot { transition-property: transform, opacity, background, border-color, box-shadow; }
-#still-chrome .slot.active { transition-duration: 430ms, 210ms, 320ms, 320ms, 170ms; }
+/* Glass shine in the top-left corner: soft on the selected tab, full on hover. */
+#still-chrome .slot:not(.empty)::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  background: radial-gradient(ellipse 95% 100% at 22% 0%, rgba(var(--still-shine-rgb), .13), transparent 72%);
+}
+#still-chrome .slot.active::before { opacity: .45; }
+#still-chrome .slot:not(.empty):hover::before { opacity: 1; }
+
+#still-tab-aura-wrap {
+  position: absolute;
+  height: var(--still-toolbar-height);
+  pointer-events: none;
+  opacity: 0;
+  translate: 0 -64px;
+  transition: translate 430ms var(--still-ease), opacity 210ms ease;
+}
+#still-chrome:is(.open, :focus-within) #still-tab-aura-wrap { opacity: 1; translate: 0 0; }
+#still-tab-aura {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  width: var(--still-aura-w);
+  height: 79px;
+  transform: translate3d(var(--still-aura-x), 0, 0) scale(var(--still-aura-sx), var(--still-aura-sy));
+  transform-origin: center;
+  opacity: var(--still-aura-o);
+  background:
+    radial-gradient(ellipse 48% 35% at 50% 61%, rgba(var(--still-aura-rgb), .30), rgba(var(--still-aura-rgb), .10) 46%, transparent 100%),
+    radial-gradient(ellipse 42% 30% at 50% 51%, rgba(var(--still-shine-rgb), .09), transparent 100%);
+}
 
 #still-chrome .slot:not(.empty)::after {
   content: "";
@@ -1103,14 +1207,18 @@
   inset: -1px;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(var(--still-shimmer-angle),
-      rgba(var(--still-shimmer-light), 0) 0%,
-      rgba(var(--still-shimmer-light), calc(var(--still-shimmer-strength) * .25 * var(--still-shimmer-alpha))) 45%,
-      rgba(var(--still-shimmer-light), calc(var(--still-shimmer-strength) * var(--still-shimmer-alpha))) 80%,
-      rgba(var(--still-shimmer-light), 0) 100%) no-repeat;
-  background-size: var(--still-shimmer-width) 100%;
-  background-position: calc(var(--still-shimmer-x) - var(--pill-x, 0px) - var(--still-shimmer-width) * var(--still-shimmer-peak)) 0;
+  /* The same light as #still-tab-aura, as it shows through the tab. */
+  --still-aura-t: calc(var(--still-aura-o) * .42);
+  background:
+    radial-gradient(calc(var(--still-aura-w) * .48 * var(--still-aura-sx)) calc(27.65px * var(--still-aura-sy))
+      at calc(var(--still-aura-x) + var(--still-aura-w) / 2 - var(--pill-x, 0px)) calc(21.5px + 8.69px * var(--still-aura-sy)),
+      rgba(var(--still-aura-rgb), calc(.30 * var(--still-aura-t))), rgba(var(--still-aura-rgb), calc(.10 * var(--still-aura-t))) 46%, transparent 100%),
+    radial-gradient(calc(var(--still-aura-w) * .42 * var(--still-aura-sx)) calc(23.7px * var(--still-aura-sy))
+      at calc(var(--still-aura-x) + var(--still-aura-w) / 2 - var(--pill-x, 0px)) calc(21.5px + .79px * var(--still-aura-sy)),
+      rgba(var(--still-shine-rgb), calc(.09 * var(--still-aura-t))), transparent 100%);
 }
+
+
 
 /* The text shimmer: like a chat assistant's thinking line, the letters
    brighten as the band crosses them. */
@@ -1142,13 +1250,6 @@
   initial-value: transparent;
 }
 
-/* Landing: a short soft light on the new slot's edge. */
-#still-chrome .slot.landed { animation: still-slot-land 520ms cubic-bezier(.2, .7, .2, 1); }
-@keyframes still-slot-land {
-  from { box-shadow: inset 0 0 0 1px rgba(var(--still-shimmer-light), .34), inset 0 0 16px rgba(var(--still-shimmer-light), .09), var(--still-shadow); }
-  to { box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), var(--still-shadow); }
-}
-
 :root[still] {
   --still-pill-active: rgba(255, 255, 255, 0.99);
   --still-pill-active-edge: rgba(255, 255, 255, 0.9);
@@ -1172,5 +1273,151 @@
 
 @media (prefers-reduced-motion: reduce) {
   #still-chrome .slot:not(.empty)::after { display: none; }
-  #still-chrome .slot.landed { animation: none; }
+
+}
+
+/* ------------------------------------------------------- download pages
+   A slot opened for a file shows the download (still-window.js:
+   showDownloadPage). Drawn over the slot's blank browser, so it slides
+   with the slot. */
+
+:root[still] {
+  --still-download-bg: #f3f3f0;
+  --still-download-track: rgba(37, 38, 37, .1);
+  --still-download-muted: #5f625f;
+  --still-ease-out: cubic-bezier(0, 0, .58, 1);
+  --still-ease-out-strong: cubic-bezier(.23, 1, .32, 1);
+  --still-ease-overshoot: cubic-bezier(.34, 1.56, .64, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root[still] { --still-download-bg: #161716; --still-download-track: rgba(238, 240, 238, .12); --still-download-muted: #9ca19d; }
+}
+:root[still][still-theme="oled"] { --still-download-bg: #000 !important; --still-download-muted: #9a9a9a !important; }
+
+.still-download-page {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 104px 24px 56px;
+  overflow: auto;
+  color: var(--still-text);
+  background: var(--still-download-bg);
+  font: 14px/1.45 Inter, "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
+}
+
+.dl-body {
+  width: min(480px, 100%);
+  animation: still-dl-in 320ms var(--still-ease-out) both;
+}
+
+.dl-icon { position: relative; width: 64px; height: 64px; }
+.dl-file { width: 56px; height: 56px; display: block; }
+.dl-file-generic { fill: none; stroke: var(--still-muted); stroke-width: 1.3; stroke-linejoin: round; }
+
+.dl-badge {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--still-download-bg);
+  background: var(--still-text);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--still-download-bg);
+}
+.dl-badge svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* Downloading: the arrow keeps falling through the badge. */
+.still-download-page[data-state="running"] .dl-badge svg { animation: still-dl-fall 1.25s cubic-bezier(.45, 0, .55, 1) infinite; }
+.still-download-page[data-state="done"] .dl-badge { animation: still-dl-pop 340ms var(--still-ease-overshoot) both; }
+.still-download-page:is([data-state="failed"], [data-state="blocked"], [data-state="canceled"], [data-state="missing"]) .dl-badge { background: var(--still-muted); }
+.still-download-page[data-state="missing"] .dl-badge { display: none; }
+
+.dl-name {
+  margin: 18px 0 4px;
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.dl-meta { margin: 0; color: var(--still-download-muted); font-size: 13px; overflow-wrap: anywhere; }
+
+.dl-bar {
+  height: 6px;
+  margin-top: 22px;
+  overflow: hidden;
+  background: var(--still-download-track);
+  border-radius: 3px;
+  transition: opacity 260ms var(--still-ease-out);
+}
+.dl-fill {
+  display: block;
+  height: 100%;
+  background: var(--still-text);
+  border-radius: inherit;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms linear, background-color 200ms var(--still-ease-out);
+}
+.dl-bar.indeterminate .dl-fill { width: 30%; transform: none; animation: still-download-indeterminate 1.1s linear infinite; }
+.still-download-page[data-state="done"] .dl-bar { opacity: .4; }
+.still-download-page:is([data-state="failed"], [data-state="blocked"], [data-state="canceled"], [data-state="paused"]) .dl-fill { background: var(--still-muted); }
+.still-download-page[data-state="missing"] .dl-bar { visibility: hidden; }
+
+.dl-status {
+  min-height: 1.45em;
+  margin: 10px 0 0;
+  color: var(--still-download-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.still-download-page:is([data-state="failed"], [data-state="blocked"]) .dl-status { color: var(--still-text); }
+
+.dl-actions { min-height: 36px; margin-top: 22px; display: flex; flex-wrap: wrap; gap: 8px; }
+.dl-button {
+  height: 36px;
+  padding: 0 16px;
+  color: var(--still-text);
+  background: color-mix(in srgb, var(--still-text) 8%, transparent);
+  border: 0;
+  border-radius: 11px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  animation: still-dl-in 220ms var(--still-ease-out) both;
+  transition: background-color 120ms var(--still-ease-out), transform 140ms var(--still-ease-out-strong);
+}
+.dl-button:hover { background: color-mix(in srgb, var(--still-text) 13%, transparent); }
+.dl-button.primary { color: var(--still-download-bg); background: var(--still-text); }
+.dl-button.primary:hover { background: color-mix(in srgb, var(--still-text) 86%, var(--still-download-bg)); }
+.dl-button:active { transform: scale(.97); }
+.dl-button:focus-visible { outline: 2px solid var(--still-text); outline-offset: 2px; }
+
+.dl-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+#still-layer .download-favicon { display: grid; place-items: center; color: var(--still-text); }
+#still-layer .download-favicon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+@keyframes still-dl-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes still-dl-pop { from { transform: scale(.6); } }
+@keyframes still-dl-fall {
+  0% { transform: translateY(-9px); opacity: 0; }
+  14% { opacity: 1; }
+  40%, 62% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(10px); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dl-body, .dl-button { animation: still-dl-fade 150ms linear both; }
+  .still-download-page .dl-badge, .still-download-page .dl-badge svg { animation: none !important; }
+  .dl-bar.indeterminate .dl-fill { width: 100%; opacity: .45; animation: none; }
+  @keyframes still-dl-fade { from { opacity: 0; } }
 }

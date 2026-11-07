@@ -23,12 +23,12 @@ if (process.platform === 'linux') {
     const quote = (value) => '"' + value.replace(/["`$\\]/g, '\\$&') + '"';
     fs.writeFileSync(entry, [
       '[Desktop Entry]', 'Type=Application', 'Name=Still',
-      'Comment=Still Firefox browser',
+      'Comment=A calm browser with five browsing slots',
       `Exec=${quote(process.execPath)} ${quote(path.join(root, 'firefox', 'launcher.js'))} %U`,
       `Icon=${path.join(root, 'src', 'assets', 'still-icon.png')}`,
       'Terminal=false', 'Categories=Network;WebBrowser;',
-      'MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;',
-      'StartupWMClass=still', ''
+      'MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;',
+      'StartupWMClass=still', 'StartupNotify=true', ''
     ].join('\n'));
   }
   console.log(`Still Linux desktop entry: ${entry}`);

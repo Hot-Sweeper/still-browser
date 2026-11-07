@@ -1,5 +1,5 @@
 (() => {
-  const UI_VERSION = 32;
+  const UI_VERSION = 41;
   if (window.__stillDownloadUi?.version === UI_VERSION && window.__stillDownloadUi?.mount) {
     window.__stillDownloadUi.mount();
     return;
@@ -19,15 +19,16 @@
   let tooltipHideTimer;
   let cornerHome = null;
   let playerLab = null;
-  // Edge fill renderer (WebGL). See startEdgeMirror.
+  // Edge fill renderer. See createEdgeRenderer.
   let edge = null;
-  let edgeFrame = 0;
   let edgeVideo = null;
   let edgeObserver = null;
+  let edgeVisibilityObserver = null;
+  let edgeVisible = true;
   const PLAYER_LAB_STORAGE_KEY = 'still-youtube-player-lab-v1';
   const PLAYER_LAB_DEFAULTS = {
     height: 94,
-    mirror: true,
+    mirror: false,
     edgeFill: 'mirror',
     strength: 100,
     brightness: 100,
@@ -52,9 +53,16 @@
   function loadPlayerLabSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(PLAYER_LAB_STORAGE_KEY) || '{}');
+      // Undo the live-edge default which routed playback through a canvas.
+      // One migration only: an explicit later opt-in remains the user's choice.
+      if (localStorage.getItem('still-youtube-native-playback-v1') !== '1') {
+        saved.mirror = false;
+        localStorage.setItem(PLAYER_LAB_STORAGE_KEY, JSON.stringify(saved));
+        localStorage.setItem('still-youtube-native-playback-v1', '1');
+      }
       return {
         height: clamp(saved.height, 82, 99.5, PLAYER_LAB_DEFAULTS.height),
-        mirror: saved.mirror !== false,
+        mirror: saved.mirror === true,
         edgeFill: ['mirror', 'zoom'].includes(saved.edgeFill)
           ? saved.edgeFill : PLAYER_LAB_DEFAULTS.edgeFill,
         strength: clamp(saved.strength, 0, 100, PLAYER_LAB_DEFAULTS.strength),
@@ -99,7 +107,7 @@
       return `${x.toFixed(1)},${(20 - fadeAmount(index / 20) * 20).toFixed(1)}`;
     }).join(' '));
     controls.softness.value = String(playerLabSettings.softness);
-    controls.softnessValue.textContent = `${playerLabSettings.softness.toFixed(1).replace(/\.0$/, '')} px`;
+    controls.softnessValue.textContent = playerLabSettings.softness ? `${playerLabSettings.softness.toFixed(1).replace(/\.0$/, '')} px` : 'Sharp';
   }
 
   function fadeAmount(distance) {
@@ -160,109 +168,142 @@
   }
 
 
-  // Edge fill. The video's own frame is drawn into the gutters around it
-  // (mirrored, or zoomed to cover) with WebGL. WebGL takes the decoded frame
-  // straight from the GPU; a 2D canvas or -moz-element copies every frame
-  // through the CPU, which in Firefox costs 10 ms or more per copy and froze
-  // the page at 1080p. Drawing happens in requestAnimationFrame while the
-  // video plays, so each refresh shows the frame the compositor shows.
-  const EDGE_VERTEX = `#version 300 es
-in vec2 point;
-void main() { gl_Position = vec4(point, 0.0, 1.0); }`;
-  const EDGE_FRAGMENT = `#version 300 es
-precision highp float;
-uniform sampler2D frame;
-uniform vec2 size;      // canvas size in CSS pixels
-uniform float scale;    // backing pixels per CSS pixel
-uniform vec4 box;       // picture rectangle in CSS pixels: x, y, width, height
-uniform vec4 cover;     // zoom mode: uv offset and uv scale
-uniform float zoom;     // 1 = zoomed cover, 0 = mirrored
-uniform float gain;     // strength times brightness
-uniform float muted;
-uniform float fade;
-uniform float curve;    // 0 soft, 1 late, 2 linear, 3 early
-out vec4 color;
-
-float fadeAmount(float t) {
-  t = clamp(t, 0.0, 1.0);
-  if (curve < 0.5) return t * t;
-  if (curve < 1.5) return t * t * t * t;
-  if (curve < 2.5) return t;
-  return sqrt(t);
-}
-
-void main() {
-  vec2 px = vec2(gl_FragCoord.x, size.y * scale - gl_FragCoord.y) / scale;
-  vec2 v = (px - box.xy) / box.zw;
-  bool inside = v.x >= 0.0 && v.x <= 1.0 && v.y >= 0.0 && v.y <= 1.0;
-  vec2 uv;
-  if (inside) uv = v;
-  else if (zoom > 0.5) uv = cover.xy + px / size * cover.zw;
-  else uv = 1.0 - abs(1.0 - mod(abs(v), 2.0));
-  vec3 rgb = texture(frame, clamp(uv, 0.0, 1.0)).rgb;
-  if (!inside) {
-    if (muted > 0.5) {
-      float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-      rgb = mix(vec3(luma), rgb, 0.28);
-      rgb = ((rgb - 0.5) * 1.04 + 0.5) * 0.97;
-    }
-    rgb *= gain;
-    if (fade > 0.5) {
-      // 0 at the picture's edge, 1 at the player's outer edge.
-      float dx = px.x < box.x ? (box.x - px.x) / max(box.x, 1.0)
-        : px.x > box.x + box.z ? (px.x - box.x - box.z) / max(size.x - box.x - box.z, 1.0) : 0.0;
-      float dy = px.y < box.y ? (box.y - px.y) / max(box.y, 1.0)
-        : px.y > box.y + box.w ? (px.y - box.y - box.w) / max(size.y - box.y - box.w, 1.0) : 0.0;
-      rgb *= 1.0 - fadeAmount(max(dx, dy));
-    }
-  }
-  color = vec4(clamp(rgb, 0.0, 1.0), 1.0);
-}`;
-
+  // Live edges. The gutters show the video's own frames a second time:
+  // captureStream shares the decoded frames with copy <video> elements (no
+  // copy, no readback, no per-frame script), and the compositor draws them,
+  // mirrored with transforms and coloured, blurred and faded with CSS on the
+  // GPU. Full resolution at any video size, including 4K, with near-zero
+  // overhead. The native video is untouched: it keeps its own picture, audio
+  // and frame pacing, and the copies sit underneath it.
   function createEdgeRenderer(player) {
-    const canvas = document.createElement('canvas');
+    const video = currentVideo();
+    if (!video || typeof (video.captureStream || video.mozCaptureStream) !== 'function') return null;
+    const canvas = document.createElement('div');
     canvas.id = 'still-youtube-edge-mirror';
     canvas.setAttribute('aria-hidden', 'true');
-    // Below YouTube's video container (z-index 10), so the picture itself
-    // always comes from the real video element.
-    canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;contain:strict;display:none';
-    const gl = canvas.getContext('webgl2', {
-      alpha: false, antialias: false, depth: false, stencil: false,
-      premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'
-    });
-    if (!gl) return null;
-    const shader = (type, source) => {
-      const result = gl.createShader(type);
-      gl.shaderSource(result, source);
-      gl.compileShader(result);
-      if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(result) || 'shader');
-      return result;
+    // Below the native video (10). This surface must never replace playback.
+    canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1;contain:strict;overflow:hidden;display:none;visibility:hidden';
+    // A closed shadow root keeps the copies out of every page query for
+    // "the video" (YouTube's, other scripts', and this file's).
+    const root = canvas.attachShadow({ mode: 'closed' });
+    const effects = document.createElement('div');
+    effects.style.cssText = 'position:absolute;inset:0';
+    root.append(effects);
+    let stream = null;
+    let source = null;
+    const copies = [];
+    const fades = [];
+    const renderer = {
+      canvas, player, geometry: null, broken: false, configKey: null,
+      // Shares the native video's frames; the copies never carry audio.
+      capture(next) {
+        if (source === next && stream?.getVideoTracks().some((track) => track.readyState === 'live')) return true;
+        renderer.release();
+        if (!next || next.mediaKeys) return false;
+        try {
+          const captured = (next.captureStream || next.mozCaptureStream).call(next);
+          for (const track of captured.getAudioTracks()) track.stop();
+          stream = new MediaStream(captured.getVideoTracks());
+          source = next;
+        } catch {
+          return false;
+        }
+        for (const copy of copies) { copy.srcObject = stream; copy.play().catch(() => {}); }
+        return true;
+      },
+      release() {
+        for (const track of stream?.getTracks() || []) track.stop();
+        stream = null;
+        source = null;
+        for (const copy of copies) copy.srcObject = null;
+      },
+      configure(config) {
+        const { box, width, height } = config;
+        const [left, top, boxWidth, boxHeight] = box;
+        const blur = config.softness;
+        const filters = [];
+        if (config.muted) filters.push('saturate(.28)', 'contrast(1.04)', 'brightness(.97)');
+        if (config.gain !== 1) filters.push(`brightness(${config.gain})`);
+        if (blur > 0) filters.push(`blur(${blur}px)`);
+        effects.style.filter = filters.join(' ') || 'none';
+        // Tiles of the picture: mirrored in a grid around it, or one zoomed
+        // cover. A blur also needs the picture itself and tiles past the
+        // player's edge, so it blends instead of darkening at the borders.
+        const reach = blur * 3;
+        const tiles = [];
+        if (config.zoom) {
+          const scale = Math.max(width / boxWidth, height / boxHeight);
+          const w = boxWidth * scale;
+          const h = boxHeight * scale;
+          tiles.push({ x: (width - w) / 2, y: (height - h) / 2, w, h, flipX: false, flipY: false });
+        } else {
+          const count = (gap) => (gap >= 0.5 ? Math.ceil((gap + reach) / boxWidth) : 0);
+          const countY = (gap) => (gap >= 0.5 ? Math.ceil((gap + reach) / boxHeight) : 0);
+          const nLeft = count(left);
+          const nRight = count(width - left - boxWidth);
+          const nTop = countY(top);
+          const nBottom = countY(height - top - boxHeight);
+          for (let j = -nTop; j <= nBottom; j++) {
+            for (let i = -nLeft; i <= nRight; i++) {
+              if (i === 0 && j === 0 && blur <= 0) continue;
+              tiles.push({
+                x: left + i * boxWidth, y: top + j * boxHeight, w: boxWidth, h: boxHeight,
+                flipX: Math.abs(i) % 2 === 1, flipY: Math.abs(j) % 2 === 1
+              });
+            }
+          }
+        }
+        while (copies.length > tiles.length) copies.pop().remove();
+        while (copies.length < tiles.length) {
+          const copy = document.createElement('video');
+          copy.muted = true;
+          copy.autoplay = true;
+          copy.playsInline = true;
+          copy.disablePictureInPicture = true;
+          copy.style.cssText = 'position:absolute;left:0;top:0;object-fit:fill;transform-origin:center;background:#000';
+          if (stream) { copy.srcObject = stream; copy.play().catch(() => {}); }
+          effects.append(copy);
+          copies.push(copy);
+        }
+        // Each tile reaches one device pixel past its edges, under its
+        // neighbours and the picture, so anti-aliased seams never show black.
+        const overlap = 1 / (window.devicePixelRatio || 1);
+        tiles.forEach((tile, index) => Object.assign(copies[index].style, {
+          left: `${tile.x - overlap}px`, top: `${tile.y - overlap}px`,
+          width: `${tile.w + 2 * overlap}px`, height: `${tile.h + 2 * overlap}px`,
+          transform: tile.flipX || tile.flipY ? `scale(${tile.flipX ? -1 : 1}, ${tile.flipY ? -1 : 1})` : 'none'
+        }));
+        // Fade: black that rises from 0 at the picture to the curve's end at
+        // the player's edge, one gradient per gutter.
+        const sides = [];
+        if (config.fade) {
+          const right = left + boxWidth;
+          const bottom = top + boxHeight;
+          if (top >= 0.5) sides.push({ x: 0, y: 0, w: width, h: top, to: 'top' });
+          if (height - bottom >= 0.5) sides.push({ x: 0, y: bottom, w: width, h: height - bottom, to: 'bottom' });
+          if (left >= 0.5) sides.push({ x: 0, y: top, w: left, h: boxHeight, to: 'left' });
+          if (width - right >= 0.5) sides.push({ x: right, y: top, w: width - right, h: boxHeight, to: 'right' });
+        }
+        const stops = Array.from({ length: 17 }, (_, index) => (
+          `rgba(0,0,0,${fadeAmount(index / 16).toFixed(4)}) ${(index / 16 * 100).toFixed(2)}%`
+        )).join(',');
+        while (fades.length > sides.length) fades.pop().remove();
+        while (fades.length < sides.length) {
+          const fade = document.createElement('div');
+          fade.style.position = 'absolute';
+          root.append(fade);
+          fades.push(fade);
+        }
+        sides.forEach((side, index) => Object.assign(fades[index].style, {
+          left: `${side.x}px`, top: `${side.y}px`, width: `${side.w}px`, height: `${side.h}px`,
+          background: `linear-gradient(to ${side.to},${stops})`
+        }));
+      },
+      destroy() {
+        renderer.release();
+        canvas.remove();
+      }
     };
-    const program = gl.createProgram();
-    gl.attachShader(program, shader(gl.VERTEX_SHADER, EDGE_VERTEX));
-    gl.attachShader(program, shader(gl.FRAGMENT_SHADER, EDGE_FRAGMENT));
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program');
-    gl.useProgram(program);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const point = gl.getAttribLocation(program, 'point');
-    gl.enableVertexAttribArray(point);
-    gl.vertexAttribPointer(point, 2, gl.FLOAT, false, 0, 0);
-    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const uniforms = {};
-    for (const name of ['size', 'scale', 'box', 'cover', 'zoom', 'gain', 'muted', 'fade', 'curve']) {
-      uniforms[name] = gl.getUniformLocation(program, name);
-    }
-    const renderer = { canvas, gl, uniforms, player, geometry: null, broken: false };
-    canvas.addEventListener('webglcontextlost', (event) => {
-      event.preventDefault();
-      if (edge === renderer) stopEdgeMirror();
-    });
     player.prepend(canvas);
     return renderer;
   }
@@ -278,9 +319,13 @@ void main() {
   // Layout work happens here, only when something changed, never per frame.
   function measureEdge() {
     if (!edge) return false;
-    const { player, canvas, gl, uniforms } = edge;
+    const { player, canvas } = edge;
     const video = edgeVideo;
-    if (!video?.videoWidth || !video.videoHeight) { edge.geometry = null; return false; }
+    if (!video?.videoWidth || !video.videoHeight || video.mediaKeys) {
+      edge.geometry = null;
+      canvas.style.display = 'none';
+      return false;
+    }
     fitVideoToStage(player, video);
     const width = player.clientWidth;
     const height = player.clientHeight;
@@ -296,103 +341,70 @@ void main() {
       canvas.style.display = 'none';
       return false;
     }
-    const zoom = playerLabSettings.edgeFill === 'zoom';
-    const blur = zoom ? Math.max(12, playerLabSettings.softness) : playerLabSettings.softness;
-    // A blurred fill does not need full resolution.
-    const scale = blur >= 4 ? 0.5 : Math.min(window.devicePixelRatio || 1, 2);
-    const bitmapWidth = Math.max(1, Math.round(width * scale));
-    const bitmapHeight = Math.max(1, Math.round(height * scale));
-    if (canvas.width !== bitmapWidth || canvas.height !== bitmapHeight) {
-      canvas.width = bitmapWidth;
-      canvas.height = bitmapHeight;
+    const config = {
+      width, height,
+      box: [left, top, right - left, bottom - top],
+      zoom: playerLabSettings.edgeFill === 'zoom',
+      softness: playerLabSettings.softness,
+      gain: (playerLabSettings.strength / 100) * (playerLabSettings.brightness / 100),
+      muted: mutedColors,
+      fade: playerLabSettings.fade,
+      curve: playerLabSettings.fadeCurve
+    };
+    const key = JSON.stringify(config);
+    if (edge.configKey !== key) {
+      edge.configKey = key;
+      edge.configure(config);
     }
-    const filter = blur > 0 ? `blur(${blur}px)` : 'none';
-    if (canvas.style.filter !== filter) canvas.style.filter = filter;
     canvas.style.display = '';
-    // Zoom mode: the video scaled to cover the whole player, centred.
-    const videoRatio = video.videoWidth / video.videoHeight;
-    const playerRatio = width / height;
-    const coverWidth = playerRatio > videoRatio ? 1 : playerRatio / videoRatio;
-    const coverHeight = playerRatio > videoRatio ? videoRatio / playerRatio : 1;
-    gl.viewport(0, 0, bitmapWidth, bitmapHeight);
-    gl.uniform2f(uniforms.size, width, height);
-    gl.uniform1f(uniforms.scale, bitmapWidth / width);
-    gl.uniform4f(uniforms.box, left, top, right - left, bottom - top);
-    gl.uniform4f(uniforms.cover, (1 - coverWidth) / 2, (1 - coverHeight) / 2, coverWidth, coverHeight);
-    gl.uniform1f(uniforms.zoom, zoom ? 1 : 0);
-    gl.uniform1f(uniforms.gain, (playerLabSettings.strength / 100) * (playerLabSettings.brightness / 100));
-    gl.uniform1f(uniforms.muted, mutedColors ? 1 : 0);
-    gl.uniform1f(uniforms.fade, playerLabSettings.fade ? 1 : 0);
-    gl.uniform1f(uniforms.curve, ['soft', 'late', 'linear', 'early'].indexOf(playerLabSettings.fadeCurve));
     edge.geometry = { width, height };
     return true;
   }
 
-  function drawEdge() {
-    if (!edge?.geometry || edge.broken || !edgeVideo || edgeVideo.readyState < 2) return false;
-    const { gl } = edge;
-    try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, edgeVideo);
-    } catch {
-      // A protected stream refuses to be read. Its gutters stay black.
-      edge.broken = true;
-      edge.canvas.style.display = 'none';
-      return false;
+  // Shows the edges while they are wanted, visible and have gutters to fill;
+  // otherwise releases the capture so hidden edges cost nothing.
+  function updateEdge() {
+    if (!edge) return;
+    if (!edgeVisible || !edgeWanted() || !measureEdge() || !edge.capture(edgeVideo)) {
+      edge.release();
+      edge.canvas.style.visibility = 'hidden';
+      return;
     }
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    return true;
-  }
-
-  function edgeTick() {
-    edgeFrame = 0;
-    if (!edge || !edgeWanted()) return;
-    drawEdge();
-    if (edgeVideo && !edgeVideo.paused && !edgeVideo.ended) edgeFrame = requestAnimationFrame(edgeTick);
-  }
-
-  // Paused: draw once now and once more when the next frame is presented
-  // (after a seek the new frame arrives a little later).
-  function drawEdgeOnce() {
-    if (edgeFrame) return;
-    drawEdge();
-    try { edgeVideo?.requestVideoFrameCallback?.(() => { if (!edgeFrame) drawEdge(); }); } catch {}
+    edge.canvas.style.visibility = 'visible';
   }
 
   function onEdgeVideoEvent(event) {
     if (!edge) return;
-    if (event.type === 'resize' || event.type === 'loadeddata') measureEdge();
-    if (!edgeVideo.paused && !edgeFrame) edgeFrame = requestAnimationFrame(edgeTick);
-    else drawEdgeOnce();
+    // A new source (or DRM) needs a fresh capture.
+    if (event.type === 'emptied' || event.type === 'loadeddata' || event.type === 'encrypted') edge.release();
+    updateEdge();
   }
 
-  const EDGE_EVENTS = ['play', 'playing', 'pause', 'seeked', 'loadeddata', 'resize', 'emptied'];
+  const EDGE_EVENTS = ['loadeddata', 'resize', 'emptied', 'encrypted'];
 
   function watchEdgeVideo(video) {
     if (edgeVideo === video) return;
     if (edgeVideo) EDGE_EVENTS.forEach((name) => edgeVideo.removeEventListener(name, onEdgeVideoEvent));
+    edge?.release();
     edgeVideo = video;
     if (video) EDGE_EVENTS.forEach((name) => video.addEventListener(name, onEdgeVideoEvent));
   }
 
   function stopEdgeMirror() {
-    if (edgeFrame) cancelAnimationFrame(edgeFrame);
-    edgeFrame = 0;
+    edgeVisibilityObserver?.disconnect();
+    edgeVisibilityObserver = null;
+    edgeVisible = true;
     watchEdgeVideo(null);
     edgeObserver?.disconnect();
     edgeObserver = null;
-    if (edge) {
-      try { edge.gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch {}
-      edge.canvas.remove();
-    }
+    edge?.destroy();
     edge = null;
     document.querySelector('#still-youtube-edge-mirror')?.remove();
   }
 
   function startEdgeMirror() {
     if (!edgeWanted()) {
-      if (edgeFrame) cancelAnimationFrame(edgeFrame);
-      edgeFrame = 0;
-      if (edge) edge.canvas.style.display = 'none';
+      if (edge) { edge.release(); edge.canvas.style.display = 'none'; }
       if (!isWatchPage() || !playerLabSettings.mirror) stopEdgeMirror();
       return;
     }
@@ -403,16 +415,16 @@ void main() {
     if (!edge) {
       try { edge = createEdgeRenderer(player); } catch { edge = null; }
       if (!edge) return;
-      edgeObserver = new ResizeObserver(() => { if (measureEdge()) drawEdgeOnce(); });
+      edgeObserver = new ResizeObserver(() => updateEdge());
       edgeObserver.observe(player);
+      edgeVisibilityObserver = new IntersectionObserver(([entry]) => {
+        edgeVisible = entry.isIntersecting;
+        updateEdge();
+      });
+      edgeVisibilityObserver.observe(player);
     }
     watchEdgeVideo(video);
-    if (!measureEdge()) return;
-    if (!video.paused && !video.ended) {
-      if (!edgeFrame) edgeFrame = requestAnimationFrame(edgeTick);
-    } else {
-      drawEdgeOnce();
-    }
+    updateEdge();
   }
 
   function positionPlayerLabPanel() {
@@ -526,7 +538,7 @@ void main() {
     const mirrorLabel = document.createElement('label');
     mirrorLabel.className = 'switch-line line';
     const mirrorText = document.createElement('span');
-    mirrorText.textContent = 'Fill edges';
+    mirrorText.textContent = 'Live edges (extra GPU work)';
     const mirrorInput = document.createElement('input');
     mirrorInput.dataset.control = 'mirror';
     mirrorInput.type = 'checkbox';
@@ -566,7 +578,7 @@ void main() {
     edgeStyleLabel.append(edgeStyleText, edgeStyleSelect);
     const strengthControl = createRangeControl('Edge strength', 'strength', 0, 100, 1);
     const brightnessControl = createRangeControl('Edge brightness', 'brightness', 0, 100, 1);
-    const softnessControl = createRangeControl('Edge softness', 'softness', 0, 24, .5);
+    const softnessControl = createRangeControl('Edge blur', 'softness', 0, 24, .5);
     const curveLabel = document.createElement('label');
     curveLabel.className = 'curve-line';
     const curveText = document.createElement('span');
@@ -848,7 +860,7 @@ void main() {
       '#actions #top-level-buttons-computed button, #actions button-view-model button, #actions yt-button-shape button'
     )];
     const visible = (button) => button.getBoundingClientRect().width > 0;
-    const description = (button) => `${button.getAttribute('aria-label') || ''} ${button.innerText || ''}`;
+    const description = (button) => `${button.getAttribute('aria-label') || ''} ${button.textContent || ''}`;
     // Copy a complete tonal pill, never the segmented Like half (its right radius is zero).
     const reference = candidates.find((button) => visible(button) && /share|teilen/i.test(description(button)))
       || candidates.find((button) => visible(button) && /save|speichern/i.test(description(button)))
@@ -1136,7 +1148,7 @@ void main() {
   function hideThanksButtons() {
     for (const row of actionRows()) {
       for (const button of row.querySelectorAll('button')) {
-        const description = `${button.getAttribute('aria-label') || ''} ${button.innerText || ''}`;
+        const description = `${button.getAttribute('aria-label') || ''} ${button.textContent || ''}`;
         if (!/thanks|danke|support/i.test(description)) continue;
         const item = directChildFor(row, button);
         if (item) item.dataset.stillThanksHidden = 'true';
@@ -1158,7 +1170,7 @@ void main() {
     }) || rows[0];
     if (!row) return null;
     const buttons = [...row.querySelectorAll('button')];
-    const description = (button) => `${button.getAttribute('aria-label') || ''} ${button.innerText || ''}`;
+    const description = (button) => `${button.getAttribute('aria-label') || ''} ${button.textContent || ''}`;
     const saveButton = buttons.find((button) => /save|speichern|playlist/i.test(description(button)));
     const shareButton = buttons.find((button) => /share|teilen/i.test(description(button)));
     const saveItem = directChildFor(row, saveButton);
@@ -1220,6 +1232,11 @@ void main() {
       clearTimeout(tooltipTimer);
       clearTimeout(tooltipHideTimer);
       mountObserver?.disconnect();
+      if (sidePanelFrame) cancelAnimationFrame(sidePanelFrame);
+      sidePanelFrame = 0;
+      if (panelPositionFrame) cancelAnimationFrame(panelPositionFrame);
+      panelPositionFrame = 0;
+      window.removeEventListener('scroll', onPageScroll, true);
       window.removeEventListener('still-download-progress', handleProgress);
       currentUi?.host.remove();
       cornerHome?.remove();
@@ -1255,9 +1272,18 @@ void main() {
   window.addEventListener('resize', () => startEdgeMirror());
   document.addEventListener('fullscreenchange', () => startEdgeMirror());
   document.addEventListener('visibilitychange', () => startEdgeMirror());
-  window.addEventListener('scroll', positionCurrentPanel, true);
-  window.addEventListener('scroll', positionCurrentTooltip, true);
-  window.addEventListener('scroll', positionPlayerLabPanel, true);
+  let panelPositionFrame = 0;
+  function positionOpenPanels() {
+    panelPositionFrame = 0;
+    positionCurrentPanel();
+    positionCurrentTooltip();
+    positionPlayerLabPanel();
+  }
+  function onPageScroll() {
+    if (!panelPositionFrame && ((currentUi && (!currentUi.panel.hidden || !currentUi.tooltip.hidden))
+      || (playerLab && !playerLab.panel.hidden))) panelPositionFrame = requestAnimationFrame(positionOpenPanels);
+  }
+  window.addEventListener('scroll', onPageScroll, { capture: true, passive: true });
   // A playlist or live chat keeps the side column; recommendations never do.
   let sidePanelFrame = 0;
   function updateSidePanel() {
@@ -1272,20 +1298,36 @@ void main() {
   document.addEventListener('wheel', (event) => {
     if (document.fullscreenElement && event.target?.closest?.('#movie_player')) event.stopImmediatePropagation();
   }, { capture: true, passive: true });
-  mountObserver = new MutationObserver(() => {
-    if (!sidePanelFrame) sidePanelFrame = requestAnimationFrame(updateSidePanel);
+  function updateWatchUi() {
+    updateSidePanel();
     if (!isWatchPage()) return;
     const placement = findActionPlacement();
     if (!currentUi?.host?.isConnected
       || !document.querySelector('#still-youtube-corner-home')
       || !document.querySelector('#still-youtube-player-lab')
       || !document.querySelector('#still-youtube-player-lab-panel')
+      || (edgeVideo && edgeVideo !== currentVideo())
       || (placement && currentUi.host.parentElement !== placement.row)
       ) {
       scheduleMount();
     } else {
       hideThanksButtons();
     }
+  }
+  mountObserver = new MutationObserver((records) => {
+    if (!isWatchPage()) return;
+    // Ignore our own menus and the custom feed. Their mutations cannot move
+    // YouTube's action row or reveal a native playlist/chat column.
+    if (!records.some(({ target, addedNodes, removedNodes }) => {
+      const element = target.nodeType === 1 ? target : target.parentElement;
+      if (element?.closest('ytd-comments, #still-youtube-edge-mirror, #still-youtube-download-host, #still-youtube-player-lab, #still-youtube-player-lab-panel, #still-youtube-home, #still-youtube-search, #still-youtube-channel')) return false;
+      // Time labels, progress and control changes do not relocate the action
+      // row. A replaced video does need the renderer to bind to its new source.
+      if (element?.closest('#movie_player')) return [...addedNodes, ...removedNodes].some(node =>
+        node.nodeType === 1 && (node.matches('video') || node.querySelector('video')));
+      return true;
+    })) return;
+    if (!sidePanelFrame) sidePanelFrame = requestAnimationFrame(updateWatchUi);
   });
   mountObserver.observe(document.documentElement, { childList: true, subtree: true });
   mount();
