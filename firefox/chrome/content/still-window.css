@@ -12,6 +12,9 @@
   --still-accent: #555b57;
   --still-shadow: 0 10px 32px rgba(16, 20, 17, 0.15), 0 2px 8px rgba(16, 20, 17, 0.08);
   --still-ease: cubic-bezier(.16, 1, .3, 1);
+  --still-ease-out: cubic-bezier(0, 0, .58, 1);
+  --still-ease-out-strong: cubic-bezier(.23, 1, .32, 1);
+  --still-ease-overshoot: cubic-bezier(.34, 1.56, .64, 1);
   --still-aura-rgb: 128, 150, 137;
   --still-shine-rgb: 226, 236, 229;
 }
@@ -125,7 +128,8 @@
   pointer-events: none;
   color: var(--still-text);
   font: 13px/1.3 Inter, "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
-  -moz-window-dragging: no-drag;
+  /* No window-dragging value here: a full-window "no-drag" would cancel
+     every drag area below it on Linux. */
 }
 
 :root[inDOMFullscreen] #still-layer {
@@ -157,11 +161,21 @@
 /* The top band: Windows resizes in its first 8 px; below that, down to the
    slots, it moves the window (the bar's own background does the same once
    it is open). Nothing is drawn. */
+/* The top band and the open bar's empty space act as a title bar: the
+   window manager moves the window from here (and un-maximizes it when
+   dragged away from the top). Only while the bar is open does its own
+   background drag, so page content under the hidden bar stays clickable. */
 #still-reveal {
   position: absolute;
   inset: 0 0 auto 0;
   height: 18px;
   pointer-events: auto;
+  -moz-window-dragging: drag;
+}
+
+#still-chrome:is(.open, :focus-within),
+#still-chrome:is(.open, :focus-within) :is(.slot-row, .top-controls) {
+  -moz-window-dragging: drag;
 }
 
 #still-nav-stage {
@@ -194,8 +208,6 @@
 .slot-suggestions,
 #still-chrome .utility-button.panel-open { --still-glass-tint: var(--still-pill-strong); }
 #still-chrome .top-control { --still-glass-tint: var(--still-pill); }
-#still-chrome .top-control:hover { --still-glass-tint: var(--still-pill-hover); }
-#still-chrome .top-control.danger:hover { --still-glass-tint: #c84646; }
 #still-tab-dock { --still-glass-tint: rgba(246, 246, 247, .95); }
 #still-replacement-modal { --still-glass-tint: color-mix(in srgb, var(--still-pill-strong) 92%, transparent); }
 
@@ -544,10 +556,78 @@
   cursor: pointer;
 }
 
-#still-chrome .top-control:hover { background: var(--still-pill-hover); }
 #still-chrome .top-control:focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: 1px; }
-#still-chrome .top-control.danger:hover { color: #fff; background: #c84646; border-color: #c84646; }
 .control-icon { width: 17px; height: 17px; }
+
+/* Hover lifts the surface toward the text colour and brightens the rim;
+   press sinks the button from the first frame and lets it spring back.
+   `scale` is separate from the transform the bar's entrance owns. */
+#still-chrome .top-control {
+  scale: 1;
+  transition:
+    transform 430ms var(--still-ease),
+    opacity 210ms var(--still-ease-out),
+    scale 220ms var(--still-ease-out-strong),
+    background-color 130ms var(--still-ease-out),
+    border-color 130ms var(--still-ease-out),
+    color 130ms var(--still-ease-out),
+    box-shadow 130ms var(--still-ease-out);
+}
+/* The entrance stagger delays only the slide in, never hover or press. */
+#still-chrome.open .top-control {
+  transition-delay: var(--enter-delay, 0ms), var(--enter-delay, 0ms), 0ms, 0ms, 0ms, 0ms, 0ms;
+}
+#still-chrome .top-control { --still-control-lift: 13%; }
+:root[still-theme="dark"] #still-chrome .top-control,
+:root[still-theme="oled"] #still-chrome .top-control { --still-control-lift: 9%; }
+@media (prefers-color-scheme: dark) {
+  :root:not([still-theme="light"]) #still-chrome .top-control { --still-control-lift: 9%; }
+}
+#still-chrome .top-control:is(:hover, :focus-visible) {
+  --still-glass-tint: color-mix(in srgb, var(--still-text) var(--still-control-lift), var(--still-pill-hover));
+  border-color: color-mix(in srgb, var(--still-text) 22%, var(--still-line));
+}
+#still-chrome .top-control:active {
+  scale: .93;
+  --still-glass-tint: color-mix(in srgb, var(--still-text) calc(var(--still-control-lift) + 7%), var(--still-pill-hover));
+  transition-duration: 430ms, 210ms, 70ms, 70ms, 70ms, 70ms, 70ms;
+}
+#still-chrome .top-control.danger:is(:hover, :focus-visible) {
+  --still-glass-tint: #c84646;
+  color: #fff;
+  border-color: #c84646;
+}
+#still-chrome .top-control.danger:active { --still-glass-tint: #a93838; border-color: #a93838; }
+
+/* Each glyph answers the pointer in its own way. */
+.top-control .control-icon,
+.top-control .control-icon * {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 220ms var(--still-ease-out-strong), opacity 160ms var(--still-ease-out);
+}
+.minimize-control:hover .control-icon { transform: translateY(1.5px); }
+.close-control:hover .control-icon { transform: rotate(90deg); }
+.maximize-control:hover:not(.restore) .maximize-front { transform: scale(1.12); }
+
+.maximize-control .restore-back { opacity: 0; transform: translate(-3px, 3px); }
+.maximize-control.restore .maximize-front { transform: translate(-1.3px, 1.3px) scale(.82); }
+.maximize-control.restore .restore-back { opacity: 1; transform: none; }
+.maximize-control.restore:hover .maximize-front { transform: translate(-2px, 2px) scale(.82); }
+.maximize-control.restore:hover .restore-back { transform: translate(.7px, -.7px); }
+.utility-button:hover .utility-icon-stage { transform: scale(1.08); }
+.utility-icon-stage { transition: transform 220ms var(--still-ease-out-strong); }
+
+@media (prefers-reduced-motion: reduce) {
+  #still-chrome .top-control:active { scale: 1; }
+  .top-control .control-icon,
+  .top-control .control-icon *,
+  .utility-icon-stage { transition: opacity 150ms var(--still-ease-out); }
+  .minimize-control:hover .control-icon,
+  .close-control:hover .control-icon,
+  .maximize-control:hover .maximize-front,
+  .utility-button:hover .utility-icon-stage { transform: none; }
+}
 
 .utility-icon-stage {
   position: relative;
@@ -1285,9 +1365,6 @@
   --still-download-bg: #f3f3f0;
   --still-download-track: rgba(37, 38, 37, .1);
   --still-download-muted: #5f625f;
-  --still-ease-out: cubic-bezier(0, 0, .58, 1);
-  --still-ease-out-strong: cubic-bezier(.23, 1, .32, 1);
-  --still-ease-overshoot: cubic-bezier(.34, 1.56, .64, 1);
 }
 @media (prefers-color-scheme: dark) {
   :root[still] { --still-download-bg: #161716; --still-download-track: rgba(238, 240, 238, .12); --still-download-muted: #9ca19d; }

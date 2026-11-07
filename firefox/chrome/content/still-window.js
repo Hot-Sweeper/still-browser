@@ -198,13 +198,18 @@
   const slotRow = h("div", { class: "slot-row", role: "toolbar", "aria-label": "Five browsing slots" });
   const utilityStage = h("span", { class: "utility-icon-stage", "aria-hidden": "true" });
   const utilityButton = h("button", { class: "top-control utility-button", type: "button" }, utilityStage);
-  const minimizeButton = h("button", { class: "top-control", type: "button", title: "Minimize", "aria-label": "Minimize" },
+  const minimizeButton = h("button", { class: "top-control minimize-control", type: "button", title: "Minimize", "aria-label": "Minimize" },
     icon(["M6.5 12h11"], "control-icon"));
-  const fullscreenButton = h("button", { class: "top-control", type: "button", title: "Fullscreen", "aria-label": "Fullscreen" },
-    icon([["rect", { x: "6.5", y: "6.5", width: "11", height: "11", rx: "2.2" }]], "control-icon"));
-  const closeButton = h("button", { class: "top-control danger", type: "button", title: "Close", "aria-label": "Close window" },
+  // One square while the window is normal; a second square slides in behind
+  // it once the window fills the screen, so the button reads as "restore".
+  const maximizeButton = h("button", { class: "top-control maximize-control", type: "button" },
+    icon([
+      ["path", { class: "restore-back", d: "M9.5 6.5h6.3a1.7 1.7 0 0 1 1.7 1.7v6.3" }],
+      ["rect", { class: "maximize-front", x: "6.5", y: "6.5", width: "11", height: "11", rx: "2.2" }]
+    ], "control-icon"));
+  const closeButton = h("button", { class: "top-control close-control danger", type: "button", title: "Close", "aria-label": "Close window" },
     icon(["m7.5 7.5 9 9m0-9-9 9"], "control-icon"));
-  const topControls = h("div", { class: "top-controls" }, utilityButton, minimizeButton, fullscreenButton, closeButton);
+  const topControls = h("div", { class: "top-controls" }, utilityButton, minimizeButton, maximizeButton, closeButton);
   const utilityPanel = h("div", { class: "utility-panel", hidden: true });
   // The current slot's soft light. It moves to whichever slot is selected.
   const auraWrap = h("div", { id: "still-tab-aura-wrap", "aria-hidden": "true" }, h("div", { id: "still-tab-aura" }));
@@ -396,10 +401,18 @@
   chrome.addEventListener("mouseenter", () => clearTimeout(state.hideTimer));
   chrome.addEventListener("mouseleave", () => { if (!chromeBusy()) scheduleChromeHide(); });
 
-  // Empty space on the open bar moves the window the way a title bar does
-  // (Windows handles the move, so snapping works); double-click maximizes.
+  // Empty space on the open bar and the top band move the window the way a
+  // title bar does, and double-click maximizes. On Windows Still asks the
+  // system to move it (so snapping works); elsewhere the CSS drag region
+  // (-moz-window-dragging) hands the press to the window manager.
   function isBarBackground(target) {
     return target === chrome || target === slotRow || target === topControls;
+  }
+
+  function toggleMaximized() {
+    if (window.fullScreen) window.fullScreen = false;
+    else if (window.windowState === window.STATE_MAXIMIZED) window.restore();
+    else window.maximize();
   }
 
   chrome.addEventListener("mousedown", (event) => {
@@ -407,24 +420,32 @@
     if (lazy.StillShared.startWindowMove(window)) event.preventDefault();
   });
 
+  // On Linux the window manager answers a double-click on a drag area itself
+  // (following the system's title bar setting), so only Windows needs this.
+  const ownDoubleClick = Services.appinfo.OS === "WINNT";
   chrome.addEventListener("dblclick", (event) => {
-    if (!isBarBackground(event.target)) return;
-    if (window.windowState === window.STATE_MAXIMIZED) window.restore();
-    else window.maximize();
+    if (ownDoubleClick && isBarBackground(event.target)) toggleMaximized();
   });
 
-  // The top band moves the window too, before the bar has slid in.
   reveal.addEventListener("mousedown", (event) => {
     if (event.button !== 0 || event.detail > 1) return;
     if (lazy.StillShared.startWindowMove(window)) event.preventDefault();
   });
-  reveal.addEventListener("dblclick", () => {
-    if (window.windowState === window.STATE_MAXIMIZED) window.restore();
-    else window.maximize();
-  });
+  reveal.addEventListener("dblclick", () => { if (ownDoubleClick) toggleMaximized(); });
+
+  function syncWindowControls() {
+    const filled = window.fullScreen || window.windowState === window.STATE_MAXIMIZED;
+    const label = window.fullScreen ? "Exit full screen" : filled ? "Restore" : "Maximize";
+    maximizeButton.classList.toggle("restore", filled);
+    maximizeButton.title = label;
+    maximizeButton.setAttribute("aria-label", label);
+  }
+  window.addEventListener("sizemodechange", syncWindowControls);
+  window.addEventListener("fullscreen", () => setTimeout(syncWindowControls));
+  syncWindowControls();
 
   minimizeButton.addEventListener("click", () => window.minimize());
-  fullscreenButton.addEventListener("click", () => { window.fullScreen = !window.fullScreen; });
+  maximizeButton.addEventListener("click", toggleMaximized);
   closeButton.addEventListener("click", () => BrowserCommands.tryToCloseWindow?.() ?? window.close());
 
   // ------------------------------------------------------------- slot pills
