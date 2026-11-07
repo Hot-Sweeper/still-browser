@@ -21,6 +21,7 @@
 
   const lazy = {};
   ChromeUtils.defineESModuleGetters(lazy, {
+    StillAgent: "resource://still/StillAgent.sys.mjs",
     Downloads: "resource://gre/modules/Downloads.sys.mjs",
     DownloadUtils: "resource://gre/modules/DownloadUtils.sys.mjs",
     StillShared: "resource://still/StillShared.sys.mjs",
@@ -209,7 +210,12 @@
     ], "control-icon"));
   const closeButton = h("button", { class: "top-control close-control danger", type: "button", title: "Close", "aria-label": "Close window" },
     icon(["m7.5 7.5 9 9m0-9-9 9"], "control-icon"));
-  const topControls = h("div", { class: "top-controls" }, utilityButton, minimizeButton, maximizeButton, closeButton);
+  // Shown only while an AI agent is connected (see the agents section).
+  const agentButton = h("button", { class: "top-control agent-control", type: "button", hidden: true, "aria-haspopup": "dialog", "aria-expanded": "false" },
+    h("span", { class: "agent-mark", "aria-hidden": "true" },
+      icon([["path", { class: "agent-star", d: "M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z" }],
+        ["circle", { class: "agent-orbit", cx: "18.2", cy: "5.6", r: "1.15" }]], "control-icon agent-glyph")));
+  const topControls = h("div", { class: "top-controls" }, agentButton, utilityButton, minimizeButton, maximizeButton, closeButton);
   const utilityPanel = h("div", { class: "utility-panel", hidden: true });
   // The current slot's soft light. It moves to whichever slot is selected.
   const auraWrap = h("div", { id: "still-tab-aura-wrap", "aria-hidden": "true" }, h("div", { id: "still-tab-aura" }));
@@ -363,7 +369,7 @@
   }
 
   function chromeBusy() {
-    return state.editingTab || state.draggedTab || chrome.matches(":hover") || !utilityPanel.hidden;
+    return state.editingTab || state.draggedTab || chrome.matches(":hover") || !utilityPanel.hidden || !agentPanel.hidden;
   }
 
   function scheduleChromeHide(delay = 300) {
@@ -371,6 +377,7 @@
     state.hideTimer = setTimeout(() => {
       if (state.editingTab || state.draggedTab || chrome.matches(":hover")) return;
       hideUtilityPanel();
+      hideAgentPanel();
       if (chrome.contains(document.activeElement)) document.activeElement.blur();
       chrome.classList.remove("open");
     }, delay);
@@ -2169,6 +2176,209 @@
     state.toastTimer = setTimeout(hideToast, duration);
   }
 
+  // --------------------------------------------------------------- agents
+  // AI agents connect through `still mcp` or `still agent` (StillAgent.sys.mjs).
+  // Tabs they open are hidden agent tabs: outside the five slots, listed in
+  // the agent panel, and moved into a slot when you (or the agent) show one.
+  // The mark in the bar breathes while an agent is connected and turns while
+  // it works; a thin light along the top edge shows it acting on this page.
+
+  const AGENT_KEY = "still-agent";
+  state.agentOpening = 0;
+  const agentState = { clients: [], engine: false, activity: null, idleTimer: 0 };
+  const agentPanel = h("div", { class: "utility-panel agent-panel", hidden: true, role: "dialog", "aria-label": "Agent access" });
+  const agentLive = h("span", { class: "visually-hidden", role: "status", "aria-live": "polite" });
+  const agentEdge = h("div", { id: "still-agent-edge", "aria-hidden": "true" });
+  chrome.append(agentPanel);
+  layer.append(agentEdge, agentLive);
+
+  function agentNames() {
+    const names = [...new Set(agentState.clients)];
+    return names.length ? new Intl.ListFormat("en", { type: "conjunction" }).format(names) : "An agent";
+  }
+
+  function agentTabs() {
+    return gBrowser.tabs.filter((tab) => tab.stillAgent && tab.hidden && !tab.closing);
+  }
+
+  function adoptAgentTab(tab) {
+    tab.stillAgent = true;
+    try { SessionStore.setCustomTabValue(tab, AGENT_KEY, "1"); } catch {}
+    // Hidden once Firefox has finished adding it.
+    Promise.resolve().then(() => {
+      if (!tab.closing && !tab.selected) gBrowser.hideTab(tab);
+      if (!agentPanel.hidden) renderAgentPanel();
+    });
+  }
+
+  function openAgentTab(url, { visible = false } = {}) {
+    state.agentOpening++;
+    let tab;
+    try {
+      tab = gBrowser.addTrustedTab(url || "about:blank", { inBackground: true });
+    } finally {
+      state.agentOpening--;
+    }
+    if (visible) Promise.resolve().then(() => showAgentTab(tab));
+    return tab;
+  }
+
+  // Bring a tab forward: an agent tab joins the slots (the slot picker asks
+  // which slot it replaces when all five are taken).
+  function showAgentTab(tab) {
+    if (!tab || tab.closing) return;
+    const owner = tab.ownerDocument.defaultView;
+    if (owner !== window) { owner.gBrowser.selectedTab = tab; owner.focus(); return; }
+    if (!tab.hidden) { activate(tab); return; }
+    tab.stillAgent = false;
+    try { SessionStore.deleteCustomTabValue(tab, AGENT_KEY); } catch {}
+    gBrowser.showTab(tab);
+    const tabs = slotTabs();
+    if (tabs.length <= SLOT_COUNT) { activate(tab); return; }
+    const home = tabs.find((candidate) => candidate !== tab && isHomeTab(candidate));
+    if (home) {
+      gBrowser.moveTabTo(tab, { tabIndex: tabPos(home), forceUngrouped: true });
+      gBrowser.selectedTab = tab;
+      gBrowser.removeTab(home, { animate: false });
+      return;
+    }
+    showOverflow(tab);
+  }
+
+  function agentStatusText() {
+    const activity = agentState.activity;
+    if (activity && Date.now() - activity.at < 2500) {
+      const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browserId === activity.tab);
+      return tab ? `${activity.label} in ${slotTitle(tab)}` : activity.label;
+    }
+    return "Ready for the next step";
+  }
+
+  function renderAgentPanel() {
+    const names = agentNames();
+    const many = new Set(agentState.clients).size > 1;
+    const rows = agentTabs().map((tab) => {
+      const row = h("div", { class: "agent-tab-row" });
+      const open = h("button", { type: "button", class: "agent-tab-open", title: "Show in a slot" },
+        faviconFor(tab, "slot-favicon agent-tab-favicon"),
+        h("span", { class: "agent-tab-copy" },
+          h("strong", { text: slotTitle(tab) }),
+          h("small", { text: displayUrl(tabUrl(tab)) || "New tab" })));
+      open.addEventListener("click", () => { hideAgentPanel(); showAgentTab(tab); });
+      const close = h("button", { type: "button", class: "agent-tab-close", title: "Close", "aria-label": `Close ${slotTitle(tab)}` }, closeGlyph());
+      close.addEventListener("click", () => { gBrowser.removeTab(tab, { animate: false }); renderAgentPanel(); });
+      row.append(open, close);
+      return row;
+    });
+    const stop = h("button", { type: "button", class: "agent-stop", text: "Stop agent access" });
+    stop.addEventListener("click", () => {
+      hideAgentPanel();
+      lazy.StillAgent.disconnectAll().catch(console.error);
+      showToast("Agent access stopped. Agents can connect again when you start one.");
+    });
+    agentPanel.replaceChildren(
+      h("div", { class: "agent-panel-head" },
+        h("strong", { text: `${names} ${many ? "are" : "is"} using Still` }),
+        h("small", { class: "agent-panel-status", text: agentStatusText() })),
+      h("div", { class: "utility-panel-heading", text: rows.length ? "Agent tabs" : "No agent tabs" }),
+      rows.length ? h("div", { class: "agent-tab-list" }, ...rows)
+        : h("p", { class: "agent-panel-note", text: "Pages the agent opens wait here, outside your five slots. It can also work in your slots when you ask." }),
+      stop);
+  }
+
+  function showAgentPanel() {
+    hideUtilityPanel();
+    renderAgentPanel();
+    agentPanel.hidden = false;
+    agentButton.setAttribute("aria-expanded", "true");
+    agentButton.classList.add("panel-open");
+    agentPanel.querySelector("button")?.focus({ preventScroll: true });
+  }
+
+  function hideAgentPanel() {
+    if (agentPanel.hidden) return;
+    agentPanel.hidden = true;
+    agentButton.setAttribute("aria-expanded", "false");
+    agentButton.classList.remove("panel-open");
+  }
+
+  agentButton.addEventListener("click", () => { if (agentPanel.hidden) showAgentPanel(); else hideAgentPanel(); });
+  agentPanel.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); hideAgentPanel(); agentButton.focus(); }
+  });
+
+  // While the agent works the mark turns; when it stops, the turn eases on
+  // to the next resting angle instead of snapping back.
+  const agentGlyph = agentButton.querySelector(".agent-glyph");
+  const TURN_MS = 1500;
+  let agentTurn = null;
+  function startAgentTurn() {
+    agentButton.classList.add("working");
+    if (agentTurn || !animationsAllowed()) return;
+    agentTurn = agentGlyph.animate([{ rotate: "0deg" }, { rotate: "360deg" }], { duration: TURN_MS, iterations: Infinity });
+  }
+  function settleAgentTurn() {
+    agentButton.classList.remove("working");
+    const turn = agentTurn;
+    agentTurn = null;
+    if (!turn) return;
+    const angle = ((turn.currentTime || 0) % TURN_MS) / TURN_MS * 360;
+    turn.cancel();
+    const rest = Math.ceil((angle + 1) / 90) * 90;
+    agentGlyph.animate([{ rotate: `${angle}deg` }, { rotate: `${rest}deg` }],
+      { duration: Math.max(180, (rest - angle) / 360 * TURN_MS * 1.8), easing: "cubic-bezier(.23, 1, .32, 1)" });
+  }
+
+  function updateAgent({ clients = [], engine = false, activity } = {}) {
+    const before = new Set(agentState.clients);
+    agentState.clients = clients;
+    agentState.engine = engine;
+    const connected = clients.length > 0;
+    const arrived = clients.filter((name) => !before.has(name));
+    agentButton.hidden = !connected;
+    const label = connected ? `${agentNames()} ${new Set(clients).size > 1 ? "are" : "is"} using Still` : "No agent connected";
+    agentButton.title = label;
+    agentButton.setAttribute("aria-label", label);
+    if (arrived.length) {
+      agentLive.textContent = `${new Intl.ListFormat("en").format(arrived)} connected`;
+      showToast(`${new Intl.ListFormat("en").format(arrived)} can now use Still`, 4200, { label: "Stop", run: () => lazy.StillAgent.disconnectAll().catch(console.error) });
+    }
+    if (!connected) {
+      hideAgentPanel();
+      settleAgentTurn();
+      layer.classList.remove("agent-acting");
+      if (before.size) agentLive.textContent = "Agent disconnected";
+    }
+    if (activity) {
+      agentState.activity = { ...activity, at: Date.now() };
+      startAgentTurn();
+      const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browserId === activity.tab);
+      const onScreen = tab && tab === gBrowser.selectedTab && !tab.hidden;
+      layer.classList.toggle("agent-acting", Boolean(onScreen));
+      const pill = tab && !onScreen && !tab.hidden ? pills.get(tab) : null;
+      pill?.classList.add("agent-busy");
+      clearTimeout(agentState.idleTimer);
+      agentState.idleTimer = setTimeout(() => {
+        settleAgentTurn();
+        layer.classList.remove("agent-acting");
+        for (const element of slotRow.querySelectorAll(".agent-busy")) element.classList.remove("agent-busy");
+        if (!agentPanel.hidden) agentPanel.querySelector(".agent-panel-status").textContent = agentStatusText();
+      }, 1400);
+    }
+    if (!agentPanel.hidden) renderAgentPanel();
+  }
+
+  // Agent tabs come back hidden after a restart.
+  function restoreAgentTabs() {
+    for (const tab of gBrowser.tabs) {
+      let marked = "";
+      try { marked = SessionStore.getCustomTabValue(tab, AGENT_KEY); } catch {}
+      if (marked !== "1") continue;
+      tab.stillAgent = true;
+      if (!tab.selected) gBrowser.hideTab(tab);
+    }
+  }
+
   // ------------------------------------------------------ download pages
   // A link that turns out to be a file leaves its new slot empty. That slot
   // shows the download instead: the file, live progress, and what to do
@@ -2475,6 +2685,7 @@
   function handleTabOpen(event) {
     const tab = event.target;
     queueRender();
+    if (state.agentOpening) { adoptAgentTab(tab); return; }
     if (!state.restored || state.bypassLimit || tab.hidden) return;
     const tabs = slotTabs();
     if (tabs.length <= SLOT_COUNT) return;
@@ -2494,6 +2705,11 @@
   // put until you pick the slot it replaces. Free slots behave as before.
   const originalAddTab = gBrowser.addTab;
   gBrowser.addTab = function stillAddTab(uri, options = {}) {
+    const opener = options?.openerBrowser && gBrowser.getTabForBrowser(options.openerBrowser);
+    if (opener?.stillAgent && opener.hidden) {
+      state.agentOpening++;
+      try { return originalAddTab.call(this, uri, { ...options, inBackground: true }); } finally { state.agentOpening--; }
+    }
     if (state.restored && !state.bypassLimit && !options?.inBackground && !options?.createLazyBrowser) {
       const tabs = slotTabs();
       if (tabs.length >= SLOT_COUNT && !tabs.some(isHomeTab)) options = { ...options, inBackground: true };
@@ -2651,7 +2867,8 @@
   }
 
   document.addEventListener("pointerdown", (event) => {
-    if (!event.target.closest?.(".utility-button, .utility-panel")) hideUtilityPanel();
+    if (!event.target.closest?.(".utility-button, .utility-panel:not(.agent-panel)")) hideUtilityPanel();
+    if (!event.target.closest?.(".agent-control, .agent-panel")) hideAgentPanel();
   }, true);
 
   // Coming back to the window briefly shows the slots, as in the Electron build.
@@ -2681,7 +2898,9 @@
     captureBrowser,
     applyTheme,
     replaySplash: () => runSplash({ force: true }),
-    runImport
+    runImport,
+    slotIndex,
+    agent: { update: updateAgent, openTab: openAgentTab, showTab: showAgentTab, tabs: agentTabs }
   };
 
   renderSlots();
@@ -2689,8 +2908,10 @@
   applyTheme(Services.prefs.getStringPref(PREF_THEME, "system"));
   (window.SessionStore?.promiseAllWindowsRestored || Promise.resolve()).then(() => {
     state.restored = true;
+    restoreAgentTabs();
     queueRender();
     watchDownloads().catch(console.error);
+    lazy.StillAgent.start().then(() => updateAgent(lazy.StillAgent.status())).catch(console.error);
     // Once, when Still has settled and you are not busy with it.
     setTimeout(() => window.requestIdleCallback(() => firstRunImport().catch(console.error), { timeout: 10000 }), 6000);
   });

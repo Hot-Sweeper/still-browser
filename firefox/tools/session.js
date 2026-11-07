@@ -10,7 +10,7 @@ const { browserArgs, browserEnv } = require('../identity');
 
 const extensionDir = path.join(__dirname, '..', 'build');
 
-async function launch({ profile, port = 2828 + Math.floor(Math.random() * 500), headless = false, extension = false, imports = false, cleanup = false, args = [] } = {}) {
+async function launch({ profile, port = 2828 + Math.floor(Math.random() * 500), headless = false, extension = false, imports = false, cleanup = false, args = [], marionette: useMarionette = true, prefs = {} } = {}) {
   const runtime = install(testRuntime);
   const disposable = !profile;
   const profileDir = profile || fs.mkdtempSync(path.join(os.tmpdir(), 'still-ff-'));
@@ -23,6 +23,10 @@ async function launch({ profile, port = 2828 + Math.floor(Math.random() * 500), 
     // Test windows sit behind other apps; keep them painting and playing.
     'user_pref("widget.windows.window_occlusion_tracking.enabled", false);',
     'user_pref("media.autoplay.default", 0);',
+    // Test browsers get their own agent socket, never the running Still's.
+    `user_pref("still.agent.dir", ${JSON.stringify(path.join(profileDir, 'agent'))});`,
+    'user_pref("still.agent.debug", true);',
+    ...Object.entries(prefs).map(([name, value]) => `user_pref(${JSON.stringify(name)}, ${JSON.stringify(value)});`),
     // Checks never make sound; the personal profile keeps its own volume.
     ...(disposable ? ['user_pref("media.volume_scale", "0.0");'] : []),
     // The first-start imports copy and read large databases; only the import
@@ -30,19 +34,23 @@ async function launch({ profile, port = 2828 + Math.floor(Math.random() * 500), 
     ...(imports ? [] : ['user_pref("still.import.electron.done", true);', 'user_pref("still.import.history.done", true);'])
   ].join('\n'));
   const child = spawn(path.join(runtime, executableName), [
-    ...browserArgs(), '-no-remote', '-profile', profileDir, '--marionette', '--remote-allow-system-access',
+    ...browserArgs(), '-no-remote', '-profile', profileDir, ...(useMarionette ? ['--marionette', '--remote-allow-system-access'] : []),
     ...(headless ? ['--headless'] : []), ...args
   ], { stdio: 'ignore', windowsHide: false, env: { ...browserEnv(), MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' } });
-  const marionette = await new Marionette(port).connect(45000);
-  await marionette.session();
-  if (extension && fs.existsSync(path.join(extensionDir, 'manifest.json'))) {
+  const marionette = useMarionette ? await new Marionette(port).connect(45000) : null;
+  if (marionette) await marionette.session();
+  if (marionette && extension && fs.existsSync(path.join(extensionDir, 'manifest.json'))) {
     await marionette.send('Addon:Install', { path: extensionDir, temporary: true });
   }
   return {
-    child, marionette, profileDir, runtime,
+    child, marionette, profileDir, runtime, agentDir: path.join(profileDir, 'agent'),
     async stop() {
-      try { await marionette.send('Marionette:Quit', { flags: ['eForceQuit'] }); } catch {}
-      marionette.close();
+      if (marionette) {
+        try { await marionette.send('Marionette:Quit', { flags: ['eForceQuit'] }); } catch {}
+        marionette.close();
+      } else if (child.exitCode === null) {
+        try { child.kill('SIGTERM'); } catch {}
+      }
       await new Promise((resolve) => {
         if (child.exitCode !== null) return resolve();
         const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(); }, 5000);

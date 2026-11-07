@@ -15,6 +15,7 @@
   --still-ease-out: cubic-bezier(0, 0, .58, 1);
   --still-ease-out-strong: cubic-bezier(.23, 1, .32, 1);
   --still-ease-overshoot: cubic-bezier(.34, 1.56, .64, 1);
+  --still-ease-in-out: cubic-bezier(.77, 0, .175, 1);
   --still-aura-rgb: 128, 150, 137;
   --still-shine-rgb: 226, 236, 229;
 }
@@ -1497,4 +1498,145 @@
   .still-download-page .dl-badge, .still-download-page .dl-badge svg { animation: none !important; }
   .dl-bar.indeterminate .dl-fill { width: 100%; opacity: .45; animation: none; }
   @keyframes still-dl-fade { from { opacity: 0; } }
+}
+
+/* ---------------------------------------------------------------- agents
+   One small living mark: it breathes while an agent is connected and turns
+   while the agent works (the turn is driven from still-window.js so it can
+   settle on a resting angle). */
+
+#still-layer .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+#still-chrome .top-control[hidden] { display: none; }
+
+.agent-mark {
+  display: grid;
+  place-items: center;
+  animation: still-agent-breathe 2.8s var(--still-ease-in-out) infinite alternate;
+}
+.agent-glyph .agent-star { fill: currentColor; stroke: none; }
+.agent-glyph .agent-orbit { fill: currentColor; stroke: none; opacity: .7; }
+.agent-control.working .agent-orbit { opacity: 1; }
+
+@keyframes still-agent-breathe {
+  from { transform: scale(.9); opacity: .78; }
+  to { transform: scale(1.04); opacity: 1; }
+}
+
+#still-chrome .agent-control.panel-open { --still-glass-tint: var(--still-pill-strong); }
+
+.agent-panel { width: min(360px, calc(100vw - 2 * var(--still-toolbar-edge))); }
+
+.agent-panel-head {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px 11px;
+  border-bottom: 1px solid var(--still-line);
+  margin-bottom: 4px;
+}
+.agent-panel-head strong { font-size: 13px; font-weight: 640; }
+.agent-panel-status { color: var(--still-muted); font-size: 12px; }
+
+.agent-tab-list { display: grid; gap: 1px; }
+.agent-tab-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: 11px;
+  transition: background-color 130ms var(--still-ease-out);
+}
+.agent-tab-row:hover { background: color-mix(in srgb, var(--still-accent) 11%, transparent); }
+
+#still-layer .agent-tab-open {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px 8px 10px;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+}
+.agent-tab-favicon { width: 16px; height: 16px; }
+.agent-tab-copy { min-width: 0; display: grid; gap: 2px; }
+.agent-tab-copy :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-tab-copy strong { font-size: 13px; font-weight: 560; }
+.agent-tab-copy small { color: var(--still-muted); font-size: 11px; }
+
+#still-layer .agent-tab-close {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  margin-right: 4px;
+  color: var(--still-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background-color 130ms var(--still-ease-out), color 130ms var(--still-ease-out), scale 160ms var(--still-ease-out-strong);
+}
+#still-layer .agent-tab-close:is(:hover, :focus-visible) { color: var(--still-text); background: color-mix(in srgb, var(--still-text) 9%, transparent); }
+#still-layer .agent-tab-close:active { scale: .92; }
+
+.agent-panel-note { margin: 2px 10px 10px; color: var(--still-muted); font-size: 12px; line-height: 1.45; }
+
+#still-layer .agent-stop {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px;
+  color: var(--still-text);
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--still-text) 7%, transparent);
+  border: 1px solid var(--still-line);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background-color 130ms var(--still-ease-out), color 130ms var(--still-ease-out), scale 160ms var(--still-ease-out-strong);
+}
+#still-layer .agent-stop:is(:hover, :focus-visible) { color: #fff; background: #c84646; border-color: #c84646; }
+#still-layer .agent-stop:active { scale: .98; }
+
+/* The agent is acting on the page you are looking at: a thin light runs
+   along the top edge. The pattern moves by exactly one tile, so it loops
+   without a jump. */
+#still-agent-edge {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+  background-image: linear-gradient(90deg, transparent, rgba(var(--still-shine-rgb), .9) 45%, rgba(var(--still-aura-rgb), .95) 55%, transparent);
+  background-size: 520px 2px;
+  background-repeat: repeat-x;
+  transition: opacity 420ms var(--still-ease-out);
+}
+#still-layer.agent-acting #still-agent-edge {
+  opacity: 1;
+  transition-duration: 180ms;
+  animation: still-agent-edge 1.6s linear infinite;
+}
+@keyframes still-agent-edge {
+  from { background-position: 0 0; }
+  to { background-position: 520px 0; }
+}
+
+/* A slot the agent is working in, while you look at another one. */
+#still-chrome .slot.agent-busy {
+  box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), 0 0 0 1.5px rgba(var(--still-aura-rgb), .55), var(--still-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-mark { animation: none; }
+  #still-layer.agent-acting #still-agent-edge { animation: none; }
 }
