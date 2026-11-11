@@ -29,6 +29,12 @@
     MigrationUtils: "resource:///modules/MigrationUtils.sys.mjs"
   });
 
+  // Ctrl+wheel switches slots, so the zoom keys are the only way to zoom.
+  // Pages must not be able to take them: some (bettermarks' formula editor)
+  // read Ctrl+- as a plain "-" and cancel it. Reserved keys go to Firefox
+  // before the page sees them, like Ctrl+W and Ctrl+T.
+  for (const key of document.querySelectorAll('key[command^="cmd_fullZoom"]')) key.setAttribute("reserved", "true");
+
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let revealOpen = false;
   const state = {
