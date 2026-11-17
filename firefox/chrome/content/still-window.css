@@ -1965,11 +1965,207 @@
 }
 #still-chrome .slot.active .slot-surface { border-color: var(--still-slot-active-edge); }
 #still-chrome .slot:not(.active):hover .slot-surface { border-color: color-mix(in srgb, var(--still-slot-edge), var(--still-slot-active-edge)); }
-/* Empty slots: a dashed outline is their whole edge, and the label stays
-   readable on the bar's scrim (about 5:1 in light, more in dark). */
+/* Empty slots are open places, not slots: no fill of their own, a dashed
+   outline and a plus, in light on the bar's dark scrim in every theme (the
+   scrim is always behind the open bar). Hover fills them a little and turns
+   the plus a quarter. */
 #still-chrome .slot.empty {
-  color: color-mix(in srgb, var(--still-text) 74%, transparent);
-  background: color-mix(in srgb, var(--still-pill) 86%, transparent);
-  border-color: color-mix(in srgb, var(--still-muted) 45%, transparent);
+  gap: 6px;
+  color: rgba(255, 255, 255, .8);
+  background: rgba(255, 255, 255, .05);
+  border: 1px dashed rgba(255, 255, 255, .38);
   box-shadow: none;
+}
+#still-chrome .slot.empty:is(:hover, :focus-visible) {
+  color: #fff;
+  background: rgba(255, 255, 255, .11);
+  border-color: rgba(255, 255, 255, .6);
+}
+#still-layer .slot-empty-plus {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  stroke-width: 2;
+  transition: rotate 220ms var(--still-ease-out-strong);
+}
+#still-chrome .slot.empty:hover .slot-empty-plus { rotate: 90deg; }
+@media (prefers-reduced-motion: reduce) {
+  #still-chrome .slot.empty:hover .slot-empty-plus { rotate: none; }
+}
+
+/* ------------------------------------------------------------- live view
+   What the agent sees in a tab you are not looking at (still-window.js:
+   showAgentView). A card at the bottom right, on the panel's surface. */
+
+#still-agent-view {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 41;
+  width: min(340px, calc(100vw - 32px));
+  display: grid;
+  overflow: hidden;
+  color: var(--still-text);
+  background: var(--still-pill-strong);
+  border: 1px solid var(--still-line);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .34);
+  opacity: 0;
+  translate: 0 14px;
+  scale: .97;
+  transform-origin: bottom right;
+  pointer-events: none;
+  transition: opacity 160ms var(--still-ease-out), translate 220ms var(--still-ease-out-strong), scale 220ms var(--still-ease-out-strong);
+  -moz-window-dragging: no-drag;
+}
+#still-agent-view.visible {
+  opacity: 1;
+  translate: 0 0;
+  scale: 1;
+  pointer-events: auto;
+  transition-duration: 200ms, 300ms, 300ms;
+}
+
+.agent-view-head {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 6px 8px 11px;
+}
+.agent-view-icon { display: grid; place-items: center; }
+#still-layer .agent-view-favicon { width: 16px; height: 16px; border-radius: 4px; font-size: 10px; }
+.agent-view-heading { min-width: 0; display: grid; gap: 1px; }
+.agent-view-title,
+.agent-view-place { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-view-title { font-size: 12.5px; font-weight: 600; }
+.agent-view-place { color: var(--still-muted); font-size: 11px; }
+
+#still-layer .agent-view-show {
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--still-text) 9%, transparent);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background-color 130ms var(--still-ease-out), scale 160ms var(--still-ease-out-strong);
+}
+#still-layer .agent-view-show:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--still-text) 16%, transparent); }
+#still-layer .agent-view-show:active { scale: .96; }
+#still-layer .agent-view-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--still-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 130ms var(--still-ease-out), color 130ms var(--still-ease-out), scale 160ms var(--still-ease-out-strong);
+}
+#still-layer .agent-view-close svg { width: 18px; height: 18px; }
+#still-layer .agent-view-close:is(:hover, :focus-visible) { color: var(--still-text); background: color-mix(in srgb, var(--still-text) 9%, transparent); }
+#still-layer .agent-view-close:active { scale: .92; }
+
+/* The page, at its own proportions. Until the first frame arrives the
+   stage keeps that shape with a quiet fill, so the card never jumps. */
+.agent-view-stage {
+  position: relative;
+  aspect-ratio: var(--agent-view-ratio, 16 / 10);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--still-text) 6%, transparent);
+  border-block: 1px solid var(--still-line);
+}
+.agent-view-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 200ms var(--still-ease-out);
+}
+#still-agent-view.has-frame .agent-view-canvas { opacity: 1; }
+.agent-view-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 1.5px solid rgba(var(--still-agent-rgb), .95);
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px rgba(var(--still-agent-rgb), .2);
+  opacity: 0;
+  transition: opacity 160ms var(--still-ease-out), translate 240ms var(--still-ease-out-strong),
+    width 240ms var(--still-ease-out-strong), height 240ms var(--still-ease-out-strong);
+}
+.agent-view-pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: -3px 0 0 -4px;
+  opacity: 0;
+  transition: opacity 160ms var(--still-ease-out), translate 260ms var(--still-ease-out-strong);
+}
+#still-layer .agent-view-arrow { width: 20px; height: 20px; display: block; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .4)); }
+#still-agent-view.aiming :is(.agent-view-ring, .agent-view-pointer) { opacity: 1; }
+
+.agent-view-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 12px 9px 10px;
+  font-size: 12px;
+}
+.agent-view-step { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#still-layer .agent-view-star { width: 18px; height: 18px; flex: 0 0 18px; margin: -2px -1px -2px -3px; color: rgb(var(--still-agent-rgb)); }
+#still-layer .agent-view-star .agent-star { fill: currentColor; stroke: none; }
+#still-agent-view.working .agent-view-star { animation: still-agent-spin 1.5s linear infinite; }
+
+/* The live view switch in the agent panel. */
+#still-layer .agent-switch-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 9px 10px;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--still-line);
+  border-radius: 0;
+  cursor: pointer;
+}
+.agent-switch-copy { display: grid; gap: 2px; }
+.agent-switch-copy strong { font-size: 13px; font-weight: 600; }
+.agent-switch-copy small { color: var(--still-muted); font-size: 11.5px; }
+.agent-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--still-text) 18%, transparent);
+  transition: background-color 180ms var(--still-ease-out);
+}
+.agent-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  transition: translate 240ms var(--still-ease-overshoot);
+}
+#still-layer .agent-switch-row[aria-checked="true"] .agent-switch { background: rgb(var(--still-agent-rgb)); }
+#still-layer .agent-switch-row[aria-checked="true"] .agent-switch-knob { translate: 14px 0; }
+#still-layer .agent-switch-row:focus-visible { outline-offset: -2px; border-radius: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  #still-agent-view { translate: none !important; scale: 1 !important; transition: opacity 150ms var(--still-ease-out) !important; }
+  #still-agent-view.working .agent-view-star { animation: none; }
+  .agent-view-ring, .agent-view-pointer, .agent-switch-knob { transition: opacity 150ms var(--still-ease-out); }
 }

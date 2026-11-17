@@ -168,6 +168,11 @@ tabs, cookies and saved sign-ins.
   ("Clicking “Sign in”"). Other steps are told at the bottom left, and a thin
   light runs along the top edge. A slot behind the current one that the
   agent works in is outlined.
+- When the agent works in a tab you are not looking at, a live view at the
+  bottom right shows that page as it changes, with the agent's pointer on it
+  and the current step. "Show" brings it into a slot; the panel's Live view
+  switch (pref `still.agent.liveView`) turns it off and on. It captures the
+  page only while the agent works, a few times a second at most.
 - `log_in` fills a sign-in form from Firefox's saved passwords. The password
   is typed into the page and never returned to the agent. A Primary Password,
   if you set one, still asks you first.

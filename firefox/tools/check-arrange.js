@@ -53,6 +53,10 @@ async function main() {
     await wait(1500);
     assert.deepEqual(await order(), ['ONE', 'TWO', 'THREE', 'FOUR']);
 
+    await m.run('document.querySelector("#still-reveal").dispatchEvent(new MouseEvent("mouseenter", { clientX: 300 }));');
+    await wait(700);
+    await capture('bar');
+
     // ---- pointer drag: ONE to the third place
     const open = 'document.querySelector("#still-reveal").dispatchEvent(new MouseEvent("mouseenter", { clientX: 300 }));';
     await m.run(open);
@@ -113,7 +117,7 @@ async function main() {
     // ---- agent visuals (the window side; a real agent runs further below).
     // Marionette and Still's agent engine cannot hold sessions at once, so
     // this part feeds the window the same updates StillAgent sends.
-    const agentTab = await m.run(`const tab = StillChrome.agent.openTab(arguments[0]); return tab.linkedBrowser.browserId;`, [page('#333', 'AGENT')]);
+    const agentTab = await m.run(`const tab = StillChrome.agent.openTab(arguments[0]); return tab.linkedBrowser.browserId;`, [page('#e9ecef', 'AGENT', '<br><button style="font-size:28px;padding:14px 26px">Sign in</button>').replace('color%3Awhite', 'color%3A%23222')]);
     await m.run(`StillChrome.agent.update({ clients: ["Check"], engine: true });`);
     await wait(500);
     assert.equal(await m.run('return document.querySelectorAll(".agent-chip").length;'), 1, 'the agent tab shows beside the mark');
@@ -146,6 +150,20 @@ async function main() {
     await send({ tab: behind, label: "Scrolling", target: "" });
     assert.ok(await m.run('return !!document.querySelector(".slot.agent-busy");'), 'a slot behind is marked');
     const opened = { tab: { id: agentTab } };
+
+    // ---- the live view: the agent works in its hidden tab
+    await send({ tab: agentTab, label: "Clicking", target: "Sign in", box: { x: 520, y: 330, width: 240, height: 70 } });
+    await wait(1200);
+    const live = await m.run(`const view = document.querySelector("#still-agent-view");
+      const canvas = view.querySelector("canvas");
+      const pixel = canvas.width ? [...canvas.getContext("2d").getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data] : [];
+      return { visible: view.classList.contains("visible"), frame: view.classList.contains("has-frame"), aiming: view.classList.contains("aiming"),
+        size: [canvas.width, canvas.height], pixel, step: view.querySelector(".agent-view-step").textContent, place: view.querySelector(".agent-view-place").textContent };`);
+    console.log('live view', JSON.stringify(live));
+    assert.ok(live.visible && live.frame && live.aiming, 'the live view shows the hidden agent tab with the pointer');
+    assert.equal(live.step, 'Clicking “Sign in”');
+    assert.equal(live.place, 'Agent tab');
+    await capture('agent-live-view');
 
     // ---- the panel lists steps
     await m.run(open);

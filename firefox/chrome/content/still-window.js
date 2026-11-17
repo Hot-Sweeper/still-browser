@@ -18,6 +18,7 @@
   const PREF_DOCK_SLIDE = "still.tabdock.slide";
   const PREF_UTILITY = "still.utility.mode";
   const PREF_THEME = "still.theme";
+  const PREF_AGENT_VIEW = "still.agent.liveView";
 
   const lazy = {};
   ChromeUtils.defineESModuleGetters(lazy, {
@@ -532,7 +533,7 @@
     if (emptyPills[index]) return emptyPills[index];
     const pill = h("div", { class: "slot empty", role: "button", tabindex: "0" });
     const label = h("span", { class: "slot-empty-label" });
-    pill.append(label);
+    pill.append(icon(["M12 6.5v11M6.5 12h11"], "slot-empty-plus"), label);
     const open = () => openNewSlot({ edit: true });
     pill.addEventListener("click", open);
     pill.addEventListener("keydown", (event) => {
@@ -578,7 +579,7 @@
         nodes.push(pill);
       } else {
         const pill = emptyPill(index);
-        pill.querySelector(".slot-empty-label").textContent = `+ Slot ${index + 1}`;
+        pill.querySelector(".slot-empty-label").textContent = `Slot ${index + 1}`;
         pill.setAttribute("aria-label", `Open slot ${index + 1}`);
         nodes.push(pill);
       }
@@ -1048,6 +1049,7 @@
       gBrowser.selectedTab = tab;
       gBrowser.removeTab(replaced, { animate: false });
       clearDropPreview();
+      renderAgentChips();
       showToast(`${title} closed to make room`, 6000, { label: "Undo", run: () => undoAgentReplace(tab, at) });
       return;
     }
@@ -1073,6 +1075,7 @@
       surfaceOf(pill).animate([{ scale: ".94" }, { scale: "1" }], { duration: 280, easing: "cubic-bezier(.23, 1, .32, 1)", composite: "add" });
     }
     kickMotion();
+    renderAgentChips();
     if (!agentPanel.hidden) renderAgentPanel();
   }
 
@@ -1091,6 +1094,7 @@
     const target = slotTabs()[index];
     if (target && target !== restored) gBrowser.moveTabTo(restored, { tabIndex: tabPos(target), forceUngrouped: true });
     gBrowser.selectedTab = restored;
+    renderAgentChips();
     if (!agentPanel.hidden) renderAgentPanel();
   }
 
@@ -2879,7 +2883,25 @@
         : h("p", { class: "agent-panel-note", text: "Pages the agent opens wait here, outside your five slots. It can also work in your slots when you ask." }),
       agentState.log.length ? h("div", { class: "utility-panel-heading", text: "Steps" }) : null,
       agentState.log.length ? agentSteps : null,
+      liveViewSwitch(),
+      h("p", { class: "agent-panel-note", text: "Agents use your sign-ins and cookies. They work in their own hidden tabs unless you ask them to use one of your slots." }),
       stop);
+  }
+
+  function liveViewSwitch() {
+    const on = agentViewEnabled();
+    const button = h("button", { type: "button", class: "agent-switch-row", role: "switch", "aria-checked": String(on) },
+      h("span", { class: "agent-switch-copy" },
+        h("strong", { text: "Live view" }),
+        h("small", { text: "Watch hidden agent tabs while the agent works in them" })),
+      h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" })));
+    button.addEventListener("click", () => {
+      const next = !agentViewEnabled();
+      Services.prefs.setBoolPref(PREF_AGENT_VIEW, next);
+      button.setAttribute("aria-checked", String(next));
+      if (!next) hideAgentView();
+    });
+    return button;
   }
 
   // Only what changed while the panel is open: status, current tab, steps.
@@ -3098,6 +3120,139 @@
     layer.classList.remove("agent-acting");
   }
 
+  // --- the live view: what the agent sees in a tab you are not looking at
+  // Agents mostly work in hidden agent tabs (or in a slot behind the current
+  // one). While they do, a small card at the bottom right shows that page,
+  // refreshed as the agent works (at most about three times a second, and
+  // only while it is working), with the agent's pointer and ring drawn where
+  // it acts and the step written under it. "Show" brings the tab into a
+  // slot. The close button turns the view off; the agent panel turns it on.
+  const VIEW_FRAME_MS = 350;
+  const VIEW_REST_MS = 6000;
+  const view = { tab: null, frameAt: 0, timer: 0, trail: 0, hideTimer: 0, token: 0, box: null, size: null };
+  const agentViewCanvas = h("canvas", { class: "agent-view-canvas" });
+  const agentViewRing = h("div", { class: "agent-view-ring" });
+  const agentViewPointer = h("div", { class: "agent-view-pointer" },
+    icon([["path", { class: "agent-pointer-arrow", d: "M4.6 3.4 19.2 11l-6.5 1.7-3.1 6.2Z" }]], "agent-view-arrow"));
+  const agentViewIcon = h("span", { class: "agent-view-icon" });
+  const agentViewTitle = h("span", { class: "agent-view-title" });
+  const agentViewPlace = h("small", { class: "agent-view-place" });
+  const agentViewStep = h("span", { class: "agent-view-step" });
+  const agentViewShow = h("button", { type: "button", class: "agent-view-show", text: "Show" });
+  const agentViewClose = h("button", { type: "button", class: "agent-view-close", title: "Turn off the live view", "aria-label": "Turn off the live view" }, closeGlyph());
+  const agentView = h("section", { id: "still-agent-view", "aria-label": "What the agent is doing" },
+    h("header", { class: "agent-view-head" }, agentViewIcon,
+      h("span", { class: "agent-view-heading" }, agentViewTitle, agentViewPlace), agentViewShow, agentViewClose),
+    h("div", { class: "agent-view-stage" }, agentViewCanvas, agentViewRing, agentViewPointer),
+    h("footer", { class: "agent-view-foot" }, icon([["path", { class: "agent-star", d: starPath }]], "agent-view-star"), agentViewStep));
+  layer.append(agentView);
+
+  function agentViewEnabled() {
+    return Services.prefs.getBoolPref(PREF_AGENT_VIEW, true);
+  }
+
+  function showAgentView(tab, activity) {
+    if (!agentViewEnabled() || !tab || tab.closing) return;
+    const changed = view.tab !== tab;
+    view.tab = tab;
+    view.box = activity.box || null;
+    if (changed) { view.size = null; agentView.classList.remove("has-frame"); }
+    const key = `${tab.linkedBrowser.browserId}|${tab.getAttribute("image") || ""}`;
+    if (agentViewIcon.dataset.key !== key) {
+      agentViewIcon.dataset.key = key;
+      agentViewIcon.replaceChildren(faviconFor(tab, "slot-favicon agent-view-favicon"));
+    }
+    agentViewTitle.textContent = slotTitle(tab);
+    agentViewPlace.textContent = tab.hidden ? "Agent tab" : `Slot ${slotIndex(tab) + 1}`;
+    agentViewStep.textContent = stepText(activity);
+    agentView.classList.add("visible", "working");
+    placeViewPointer();
+    requestViewFrame();
+    clearTimeout(view.hideTimer);
+    view.hideTimer = setTimeout(restAgentView, VIEW_REST_MS);
+  }
+
+  // The agent paused: the card stays while you point at it, else it leaves.
+  function restAgentView() {
+    if (agentView.matches(":hover, :focus-within")) { view.hideTimer = setTimeout(restAgentView, 1500); return; }
+    hideAgentView();
+  }
+
+  function hideAgentView() {
+    clearTimeout(view.hideTimer);
+    clearTimeout(view.timer);
+    clearTimeout(view.trail);
+    view.timer = 0;
+    view.tab = null;
+    view.token++;
+    agentView.classList.remove("visible", "working");
+  }
+
+  // One frame now (or as soon as the last one is old enough), and one more
+  // shortly after the agent's last step, to show what that step did.
+  function requestViewFrame() {
+    if (!view.timer) {
+      const wait = Math.max(0, view.frameAt + VIEW_FRAME_MS - performance.now());
+      view.timer = setTimeout(() => { view.timer = 0; view.frameAt = performance.now(); captureAgentView(); }, wait);
+    }
+    clearTimeout(view.trail);
+    view.trail = setTimeout(() => { view.frameAt = performance.now(); captureAgentView(); }, 750);
+  }
+
+  async function captureAgentView() {
+    const tab = view.tab;
+    const global = tab && !tab.closing ? tab.linkedBrowser.browsingContext?.currentWindowGlobal : null;
+    if (!global) return;
+    const reference = gBrowser.selectedBrowser;
+    const width = tab.linkedBrowser.clientWidth || reference.clientWidth || 1280;
+    const height = tab.linkedBrowser.clientHeight || reference.clientHeight || 800;
+    const stageWidth = agentViewCanvas.parentNode.clientWidth || 320;
+    const scale = Math.min(1, stageWidth * (window.devicePixelRatio || 1) / width);
+    const token = ++view.token;
+    let bitmap;
+    try {
+      bitmap = await global.drawSnapshot(new DOMRect(0, 0, width, height), scale, "white");
+    } catch {
+      return;
+    }
+    if (token !== view.token || view.tab !== tab) { bitmap.close?.(); return; }
+    agentViewCanvas.width = bitmap.width;
+    agentViewCanvas.height = bitmap.height;
+    agentViewCanvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    view.size = { width, height };
+    agentView.style.setProperty("--agent-view-ratio", `${width} / ${height}`);
+    agentView.classList.add("has-frame");
+    placeViewPointer();
+  }
+
+  function placeViewPointer() {
+    const box = view.box;
+    const size = view.size;
+    const show = Boolean(box && size);
+    agentView.classList.toggle("aiming", show);
+    if (!show) return;
+    const stage = agentViewCanvas.parentNode;
+    const k = stage.clientWidth / size.width;
+    agentViewRing.style.translate = `${(box.x * k - 2).toFixed(1)}px ${(box.y * k - 2).toFixed(1)}px`;
+    agentViewRing.style.width = `${Math.max(8, box.width * k + 4).toFixed(1)}px`;
+    agentViewRing.style.height = `${Math.max(8, box.height * k + 4).toFixed(1)}px`;
+    agentViewPointer.style.translate = `${((box.x + Math.min(box.width / 2, 28)) * k).toFixed(1)}px ${((box.y + box.height / 2) * k).toFixed(1)}px`;
+  }
+
+  agentViewShow.addEventListener("click", () => {
+    const tab = view.tab;
+    hideAgentView();
+    if (tab?.hidden) showAgentTab(tab);
+    else if (tab) activate(tab);
+  });
+  agentViewClose.addEventListener("click", () => {
+    Services.prefs.setBoolPref(PREF_AGENT_VIEW, false);
+    hideAgentView();
+    showToast("Live view is off. You can turn it back on in the agent panel.");
+    if (!agentPanel.hidden) renderAgentPanel();
+  });
+
   function updateAgent({ clients = [], engine = false, activity } = {}) {
     const before = new Set(agentState.clients);
     agentState.clients = clients;
@@ -3116,6 +3271,7 @@
       hideAgentPanel();
       settleAgentTurn();
       hideAgentOverlays();
+      hideAgentView();
       if (before.size) agentLive.textContent = "Agent disconnected";
     }
     if (activity?.label) {
@@ -3127,6 +3283,8 @@
       layer.classList.toggle("agent-acting", onScreen);
       if (onScreen && activity.box) aimPointer(tab, activity);
       else if (onScreen) narrateAgent(activity);
+      if (onScreen && view.tab === tab) hideAgentView();
+      else if (!onScreen && tab) showAgentView(tab, activity);
       for (const element of slotRow.querySelectorAll(".agent-busy")) element.classList.remove("agent-busy");
       const pill = tab && !onScreen && !tab.hidden ? pills.get(tab) : null;
       pill?.classList.add("agent-busy");
@@ -3134,6 +3292,7 @@
       agentState.idleTimer = setTimeout(() => {
         settleAgentTurn();
         layer.classList.remove("agent-acting");
+        agentView.classList.remove("working");
         for (const element of slotRow.querySelectorAll(".agent-busy")) element.classList.remove("agent-busy");
         renderAgentChips();
         refreshAgentPanel();
@@ -3145,8 +3304,12 @@
   }
 
   // Your switching away takes the agent's pointer off the page it was on.
-  gBrowser.tabContainer.addEventListener("TabSelect", hideAgentOverlays);
+  gBrowser.tabContainer.addEventListener("TabSelect", () => {
+    hideAgentOverlays();
+    if (view.tab === gBrowser.selectedTab) hideAgentView();
+  });
   gBrowser.tabContainer.addEventListener("TabClose", (event) => {
+    if (view.tab === event.target) hideAgentView();
     if (event.target.stillAgent) Promise.resolve().then(renderAgentChips);
   });
 

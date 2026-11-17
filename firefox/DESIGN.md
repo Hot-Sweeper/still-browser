@@ -20,8 +20,11 @@ the window controls slide in from the top edge when the pointer reaches it.
   (hover, press, the landing squish), lifts and leans. Icons and titles never
   scale, so they stay sharp; a dragged slot moves in device-pixel steps.
 - Themes: system, light, dark and OLED. OLED sets the surfaces to pure black.
-  Text uses `--still-text` and `--still-muted`. Empty slots are a dashed
-  outline with their label at 74% text colour.
+  Text uses `--still-text` and `--still-muted`.
+- Empty slots are open places, not slots: no fill of their own (5% white),
+  a dashed 38% white outline, a plus icon and "Slot N" at 80% white, the same
+  in every theme because the open bar always sits on its dark scrim. Hover
+  fills them to 11% and turns the plus a quarter.
 
 ## Motion tokens
 - `--still-ease`: `cubic-bezier(.16, 1, .3, 1)`, for the bar's entrance and
@@ -86,6 +89,14 @@ the window controls slide in from the top edge when the pointer reaches it.
   you switch slots.
 - Steps without an element ("Reading the page") are told in a line at the
   bottom left, with a turning star.
+- Live view: when the agent works in a tab you are not looking at (its
+  hidden tabs, or a slot behind the current one), a 340 px card at the bottom
+  right shows that page at its own proportions, refreshed at most every
+  350 ms and once more 750 ms after the last step, only while the agent
+  works. The agent's pointer and ring are drawn on it where it acts, the step
+  is written under it, and "Show" brings the tab into a slot. It leaves 6 s
+  after the agent stops unless you point at it. Its close button turns it
+  off (`still.agent.liveView`); a switch in the agent panel turns it on.
 - A slot behind the current one that the agent works in is outlined, and a
   small light pulses on its icon (it dims to 45%, never off).
 - The agent panel reuses the utility panel's surface: a live status line
