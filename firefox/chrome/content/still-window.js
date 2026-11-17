@@ -90,8 +90,9 @@
     return svg;
   }
 
-  const utilityModes = ["bookmarks", "history", "downloads", "permissions", "browser", "theme", "tabdock"];
+  const utilityModes = ["chat", "bookmarks", "history", "downloads", "permissions", "browser", "theme", "tabdock"];
   const utilityMeta = {
+    chat: { label: "Side chat (Ctrl+E)", paths: ["M6.8 5h10.4a2.3 2.3 0 0 1 2.3 2.3v6.2a2.3 2.3 0 0 1-2.3 2.3h-5.7l-4 3.2v-3.2h-.7a2.3 2.3 0 0 1-2.3-2.3V7.3A2.3 2.3 0 0 1 6.8 5Z", "M9 9.6h6M9 12.2h3.6"] },
     bookmarks: { label: "Bookmarks", paths: ["m12 3.7 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.5l-5.01 2.63.96-5.58L3.9 9.6l5.6-.8L12 3.7Z"] },
     history: { label: "History", paths: ["M4.5 5.8v4.4h4.4M5 10a7.5 7.5 0 1 1 .8 5.2M12 7.6V12l3.1 1.8"] },
     downloads: { label: "Downloads", paths: ["M12 3.5v11m-4-4 4 4 4-4M5 19.5h14"] },
@@ -2473,7 +2474,8 @@
       console.error(error);
       if (!utilityPanel.hidden) utilityPanel.append(emptyNote(`Could not load ${what}. Close this panel and try again.`));
     };
-    if (mode === "bookmarks") renderBookmarks().catch(failed("bookmarks"));
+    if (mode === "chat") { window.StillChat?.toggle(); scheduleChromeHide(400); }
+    else if (mode === "bookmarks") renderBookmarks().catch(failed("bookmarks"));
     else if (mode === "history") renderHistory().catch(failed("history"));
     else if (mode === "downloads") renderDownloads().catch(failed("downloads"));
     else if (mode === "permissions") renderPermissions();

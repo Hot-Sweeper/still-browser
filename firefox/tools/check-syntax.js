@@ -6,13 +6,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const dir = path.join(__dirname, '..', 'chrome');
-for (const file of ['still.cfg', 'still-autoconfig.js', 'content/still-window.js']) {
+for (const file of ['still.cfg', 'still-autoconfig.js', 'content/still-window.js', 'content/still-chat.js']) {
   new vm.Script(fs.readFileSync(path.join(dir, file), 'utf8'), { filename: file });
 }
 for (const file of fs.readdirSync(path.join(dir, 'content')).filter((name) => name.endsWith('.mjs'))) {
   execFileSync(process.execPath, ['--check', path.join(dir, 'content', file)], { stdio: 'inherit' });
 }
-for (const file of ['launcher.js', 'identity.js', 'install-runtime.js', 'tools/create-shortcut.js', 'tools/session.js', 'tools/check-linux-launch.js', 'tools/check-scrolling.js', 'tools/check-refresh.js', 'tools/check-watch-refresh.js', 'tools/check-youtube-startup.js', 'agent/client.js', 'agent/mcp.js', 'agent/cli.js']) {
+for (const file of ['launcher.js', 'identity.js', 'install-runtime.js', 'tools/create-shortcut.js', 'tools/session.js', 'tools/check-linux-launch.js', 'tools/check-scrolling.js', 'tools/check-refresh.js', 'tools/check-watch-refresh.js', 'tools/check-youtube-startup.js', 'tools/check-arrange.js', 'tools/capture-slots.js', 'agent/client.js', 'agent/mcp.js', 'agent/cli.js']) {
   execFileSync(process.execPath, ['--check', path.join(__dirname, '..', file)], { stdio: 'inherit' });
 }
 console.log('Still Firefox layer: syntax OK');

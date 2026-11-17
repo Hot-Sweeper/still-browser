@@ -4,6 +4,8 @@
   "description": "Still's MCP server and agent CLI. They talk to the agent bridge inside Still.",
   "license": "MIT",
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.108.0",
+    "@agentclientprotocol/codex-acp": "2.7.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "4.6.7"
   }

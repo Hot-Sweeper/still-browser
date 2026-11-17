@@ -36,7 +36,8 @@ function main() {
   async function still() {
     if (client?.socket) return client;
     connecting ||= (async () => {
-      const name = friendlyName(server.server.getClientVersion?.());
+      // Still's side chat names its agent itself ("Codex (side chat)").
+      const name = process.env.STILL_AGENT_CLIENT || friendlyName(server.server.getClientVersion?.());
       const next = new StillClient({ client: name });
       await next.connect({ launch: true });
       client = next;

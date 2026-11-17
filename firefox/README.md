@@ -177,6 +177,35 @@ tabs, cookies and saved sign-ins.
   is typed into the page and never returned to the agent. A Primary Password,
   if you set one, still asks you first.
 - Turn agent access off with the pref `still.agent.enabled` = false.
+
+### Side chat
+
+A chat panel on the right where you tell an agent what to do on the web; it
+does it in Still with your tabs and sign-ins (and you see its pointer, steps
+and live view as above).
+
+- Open it with **Ctrl+E**, the universal button's **Side chat** mode, or by
+  resting the pointer at the window's right edge for a moment (pref
+  `still.chat.edgeOpen`). Close it with its close button or Ctrl+E. Drag its
+  left edge to resize.
+- It tells the agent which page you are looking at (the chip above the
+  message field; click it to leave the page out), so "this page" works.
+- **Codex** and **Claude Code** run directly through the Agent Client
+  Protocol (ACP): `still acp codex|claude` starts the pinned adapters in
+  `firefox/agent/` (`@agentclientprotocol/codex-acp`,
+  `@agentclientprotocol/claude-agent-acp`) with your existing Codex or Claude
+  login. Replies stream, tool steps show as they run, permission questions
+  wait in the chat, and the agent's own model and reasoning choices sit in
+  the header (remembered per agent). Each session is given Still's MCP
+  server.
+- **T3 Code** sends the chat to a T3 thread (in T3's "No project") through the
+  `t3` command line, so it shows in T3 with its history. The model menu lists
+  the provider and model pairs of your recent T3 chats. Replies arrive per
+  message, not streamed, and Stop cannot interrupt a T3 turn.
+- Any other ACP agent: add it to the pref `still.chat.agents`, for example
+  `[{"id": "gemini", "name": "Gemini CLI", "command": "gemini", "args": ["--experimental-acp"]}]`.
+- Install the adapters with `npm install --prefix firefox/agent` (they are in
+  its package.json).
 - Install the client's dependencies once with
   `npm install --prefix firefox/agent`.
 
@@ -189,6 +218,9 @@ tabs, cookies and saved sign-ins.
   opens Still with the persistent profile `D:\Still Firefox Prototype\profile`
   (override with `STILL_FIREFOX_PROFILE`). No automation is attached.
 - `npm run firefox:check` checks syntax and lints the extension.
+- `npm run firefox:check-chat` checks the side chat with a fake ACP agent
+  (`tools/fake-acp-agent.js`); `-- --real` adds one plain Codex reply and
+  `-- --t3` one T3 Code thread (both without tools).
 - `npm run firefox:check-arrange` drags slots, drops links, text and agent
   tabs on them, and checks the agent's pointer, panel and a real agent client
   on disposable headless profiles. Set `STILL_CHECK_THEME=dark` for another

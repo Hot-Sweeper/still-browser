@@ -125,3 +125,22 @@ the window controls slide in from the top edge when the pointer reaches it.
 - Channel tabs preserve YouTube's supplied labels and destinations, including
   Posts and Playlists. Posts/Community and other native sections never receive
   Still's video-grid overlay, keeping YouTube's real editor and controls usable.
+
+## Side chat
+- A panel on the right of the page (`#still-chat`, last in Firefox's
+  `#browser` row), default 400 px, 320 px to 60% of the window, resized from
+  its left edge (an agent-green line shows on hover). It slides in over the
+  page (300 ms, drawer curve) and then takes its place beside it, so the page
+  reflows once; it leaves on a 220 ms ease-in. Reduced motion skips the slide.
+- Surface `--still-pill-strong` with one hairline on its left (11% text
+  colour). Header: agent name (semibold) with a menu, the agent's model and
+  reasoning choices as quiet menus, then new chat and close.
+- Your messages are bubbles on the right (10% text colour, 14/14/5/14 px
+  corners) with the page they were about under them. Replies are plain text
+  with light Markdown. Tool steps are one muted line each with a spinner,
+  an agent-green check or a red cross. Permission questions are a card with
+  an agent-green outline; the first choice is filled agent green.
+- While the agent works, three agent-green dots rise in turn under the reply
+  ("Working"), and the send button turns into a green stop button.
+- The page chip above the field shows the page the agent is told about;
+  struck through when left out.

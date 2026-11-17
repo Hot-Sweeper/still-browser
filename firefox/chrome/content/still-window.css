@@ -1941,7 +1941,7 @@
 
 #still-agent-view {
   position: absolute;
-  right: 16px;
+  right: calc(16px + var(--still-chat-open, 0px));
   bottom: 16px;
   z-index: 41;
   width: min(340px, calc(100vw - 32px));

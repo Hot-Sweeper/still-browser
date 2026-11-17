@@ -27,6 +27,7 @@
     "firefox:check-watch-refresh": "node firefox/build.js && node firefox/tools/check-watch-refresh.js",
     "firefox:check-refresh": "node firefox/build.js && node firefox/tools/check-refresh.js",
     "firefox:check-scrolling": "node firefox/build.js && node firefox/tools/check-scrolling.js",
+    "firefox:check-chat": "node firefox/build.js && node firefox/tools/check-chat.js",
     "firefox:check-arrange": "node firefox/build.js && node firefox/tools/check-arrange.js",
     "firefox:check-ui": "node firefox/build.js && node firefox/tools/check-ui.js bar,slide,vertical,edit,panel,overflow,edge,newtab,dock && node firefox/tools/check-ui.js perf,rapid,glide",
     "build:mouse-helper": "dotnet publish native/mouse-navigation-helper/MouseNavigationHelper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -p:DebugType=None -p:DebugSymbols=false -o build/mouse-helper",

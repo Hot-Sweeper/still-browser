@@ -64,6 +64,22 @@ async function main() {
 const [mode, ...rest] = process.argv.slice(2);
 if (mode === 'mcp') {
   require('./agent/mcp').main();
+} else if (mode === 'acp') {
+  // `still acp codex|claude`: an Agent Client Protocol adapter on stdio, for
+  // Still's side chat (or any ACP client). Adapters are pinned in agent/.
+  const adapters = {
+    codex: '@agentclientprotocol/codex-acp/dist/index.js',
+    claude: '@agentclientprotocol/claude-agent-acp/dist/index.js'
+  };
+  const entry = adapters[rest[0]];
+  if (!entry) {
+    console.error(`Usage: still acp ${Object.keys(adapters).join('|')}`);
+    process.exitCode = 2;
+  } else {
+    const child = require('node:child_process').spawn(process.execPath, [require.resolve(entry, { paths: [path.join(__dirname, 'agent')] }), ...rest.slice(1)], { stdio: 'inherit' });
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal));
+    child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
+  }
 } else if (mode === 'agent') {
   require('./agent/cli').main(rest).catch((error) => {
     console.error(error.message || error);
