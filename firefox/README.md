@@ -157,10 +157,15 @@ tabs, cookies and saved sign-ins.
   `tools/agent/extract-playwright-injected.js` refreshes it from a
   playwright-core package.
 - Pages an agent opens are hidden agent tabs, outside the five slots. A mark
-  in the bar shows that an agent is connected and turns while it works. Its
-  panel lists the agent's tabs, shows any of them in a slot, and stops agent
-  access. A thin light along the top edge shows the agent acting on the page
-  in front of you.
+  in the bar shows that an agent is connected and turns while it works, with
+  the agent's tabs as small icons beside it. Its panel lists the agent's
+  tabs (drag one into the slots, or click to show it in a slot), the recent
+  steps and where they happened, and stops agent access.
+- On the page in front of you the agent has its own pointer: it moves to the
+  element the agent is about to use, rings it and says what it does
+  ("Clicking “Sign in”"). Other steps are told at the bottom left, and a thin
+  light runs along the top edge. A slot behind the current one that the
+  agent works in is outlined.
 - `log_in` fills a sign-in form from Firefox's saved passwords. The password
   is typed into the page and never returned to the agent. A Primary Password,
   if you set one, still asks you first.
@@ -177,6 +182,10 @@ tabs, cookies and saved sign-ins.
   opens Still with the persistent profile `D:\Still Firefox Prototype\profile`
   (override with `STILL_FIREFOX_PROFILE`). No automation is attached.
 - `npm run firefox:check` checks syntax and lints the extension.
+- `npm run firefox:check-arrange` drags slots, drops links, text and agent
+  tabs on them, and checks the agent's pointer, panel and a real agent client
+  on disposable headless profiles. Set `STILL_CHECK_THEME=dark` for another
+  appearance. Captures go to `firefox/.local/checks/arrange-*.png`.
 - `npm run firefox:check-ui` drives a disposable profile through Marionette and
   writes window captures to `firefox/.local/checks/`. Pages there see a
   remote-controlled browser (robot icon in the window), so never use that

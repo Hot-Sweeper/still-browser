@@ -18,6 +18,9 @@
   --still-ease-in-out: cubic-bezier(.77, 0, .175, 1);
   --still-aura-rgb: 128, 150, 137;
   --still-shine-rgb: 226, 236, 229;
+  /* The agent's own colour: its pointer, the ring around what it uses. */
+  --still-agent-rgb: 52, 128, 92;
+  --still-ease-spring: linear(0, .32, .78, 1.04, 1.09, 1.06, 1.02, 1, .99, .99, 1);
 }
 
 /* OLED: dark mode on pure black. Surfaces are black; a thin light outline
@@ -48,6 +51,7 @@
     --still-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.28);
     --still-aura-rgb: 195, 217, 205;
     --still-shine-rgb: 232, 243, 236;
+    --still-agent-rgb: 132, 214, 170;
   }
 }
 
@@ -384,11 +388,6 @@
 #still-chrome .slot.active { background: var(--still-pill); }
 #still-chrome .slot.active:hover { background: var(--still-pill-hover); }
 #still-chrome .slot:focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: 1px; }
-#still-chrome.open .slot.dragging { opacity: .42; transform: translateY(3px) scale(.97); }
-#still-chrome .slot.drop-target {
-  border-color: color-mix(in srgb, var(--still-accent) 70%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--still-accent) 23%, transparent), var(--still-shadow);
-}
 
 #still-chrome .slot.empty {
   justify-content: center;
@@ -1639,4 +1638,346 @@
 @media (prefers-reduced-motion: reduce) {
   .agent-mark { animation: none; }
   #still-layer.agent-acting #still-agent-edge { animation: none; }
+}
+
+/* ------------------------------------------------------------ reordering
+   still-window.js drives the slots' `translate` and `rotate` on springs
+   while one is dragged; `transform` stays with the bar's entrance. */
+
+#still-chrome .slot-row.reordering,
+#still-chrome .slot-row.reordering .slot { cursor: grabbing; }
+
+#still-chrome .slot.lifted {
+  z-index: 3;
+  scale: 1.045;
+  --still-glass-tint: var(--still-pill-hover);
+  border-color: color-mix(in srgb, var(--still-text) 18%, var(--still-line));
+  box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), 0 18px 42px rgba(0, 0, 0, .30), 0 5px 14px rgba(0, 0, 0, .16);
+  transition-property: transform, opacity, background-color, border-color, box-shadow, scale;
+  transition-duration: 430ms, 210ms, 130ms, 130ms, 180ms, 180ms;
+  transition-timing-function: var(--still-ease), ease, var(--still-ease-out), var(--still-ease-out), var(--still-ease-out-strong), var(--still-ease-out-strong);
+  transition-delay: 0ms;
+}
+/* Letting go: the lift settles on the drop spring. */
+#still-chrome .slot-row.reordering .slot:not(.lifted) {
+  transition-property: transform, opacity, background-color, border-color, box-shadow, scale;
+  transition-duration: 430ms, 210ms, 170ms, 170ms, 320ms, 420ms;
+  transition-timing-function: var(--still-ease), ease, ease, ease, var(--still-ease-out-strong), var(--still-ease-spring);
+  transition-delay: 0ms;
+}
+
+/* ----------------------------------------------------------------- drops */
+
+#still-chrome .slot-drop-hint {
+  position: absolute;
+  inset: 3px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--still-text);
+  font-size: 12.5px;
+  font-weight: 620;
+  white-space: nowrap;
+  background: var(--still-pill-active);
+  opacity: 0;
+  scale: .96;
+  pointer-events: none;
+  transition: opacity 140ms var(--still-ease-out), scale 200ms var(--still-ease-out-strong);
+}
+#still-chrome .slot:is(.drop-load, .drop-new, .drop-replace) .slot-drop-hint { opacity: 1; scale: 1; }
+#still-chrome .slot:is(.drop-load, .drop-new) {
+  border-color: rgba(var(--still-agent-rgb), .75);
+  box-shadow: 0 0 0 2px rgba(var(--still-agent-rgb), .28), var(--still-shadow);
+}
+#still-chrome .slot.empty:is(.drop-load, .drop-new) { border-style: solid; }
+#still-chrome .slot.drop-replace {
+  border-color: rgba(200, 70, 70, .75);
+  box-shadow: 0 0 0 2px rgba(200, 70, 70, .25), var(--still-shadow);
+}
+#still-chrome .slot.drop-replace .slot-drop-hint { color: #fff; background: #c84646; }
+#still-chrome .slot.drop-consumed { opacity: 0 !important; transition-duration: 430ms, 120ms !important; }
+
+/* Where a dragged agent tab will land. */
+.still-slot-ghost {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 1.5px dashed rgba(var(--still-agent-rgb), .8);
+  border-radius: 14px;
+  color: var(--still-text);
+  background: color-mix(in srgb, var(--still-pill) 78%, transparent);
+  opacity: 0;
+  scale: .94;
+  pointer-events: none;
+  transition: opacity 150ms var(--still-ease-out), scale 220ms var(--still-ease-out-strong);
+}
+.still-slot-ghost.visible { opacity: 1; scale: 1; }
+.still-slot-ghost .slot-title-plain {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #still-chrome .slot.lifted { scale: 1; }
+  #still-chrome .slot-drop-hint,
+  .still-slot-ghost { scale: 1; transition: opacity 150ms var(--still-ease-out); }
+}
+
+/* ---------------------------------------------------------- agent visuals */
+
+/* The agent's tabs, as small icons beside its mark. */
+#still-chrome .agent-control.has-tabs {
+  width: auto;
+  display: flex;
+  gap: 7px;
+  padding: 0 9px 0 12px;
+}
+.agent-chips { display: flex; align-items: center; }
+.agent-chips:empty { display: none; }
+.agent-chip {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  margin-left: -5px;
+  border-radius: 7px;
+  background: var(--still-pill-strong);
+  box-shadow: 0 0 0 1.5px var(--still-pill-strong);
+}
+.agent-chip:first-child { margin-left: 0; }
+#still-layer .agent-chip-favicon { width: 16px; height: 16px; border-radius: 4px; font-size: 10px; }
+.agent-chip::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9px;
+  border: 1.5px solid rgba(var(--still-agent-rgb), .95);
+  opacity: 0;
+  scale: .85;
+  transition: opacity 160ms var(--still-ease-out), scale 220ms var(--still-ease-out-strong);
+}
+.agent-chip.working::after { opacity: 1; scale: 1; }
+.agent-chip-more {
+  margin-right: 4px;
+  color: var(--still-muted);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A slot the agent is working in while you look at another: a small light
+   on its icon pulses (it dims, never to nothing). */
+#still-chrome .slot.agent-busy .slot-icon { position: relative; }
+#still-chrome .slot.agent-busy .slot-icon::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--still-agent-rgb));
+  box-shadow: 0 0 0 2px var(--still-pill), 0 0 8px rgba(var(--still-agent-rgb), .8);
+  animation: still-agent-pulse 1.1s var(--still-ease-in-out) infinite alternate;
+}
+@keyframes still-agent-pulse {
+  from { opacity: 1; }
+  to { opacity: .45; }
+}
+
+/* The agent's pointer. Its tip sits on the point it aims at. */
+#still-agent-pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 40;
+  margin: -4.25px 0 0 -5.75px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms var(--still-ease-out);
+}
+#still-agent-pointer.visible { opacity: 1; transition-duration: 140ms; }
+#still-layer .agent-pointer-icon {
+  width: 30px;
+  height: 30px;
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .35));
+}
+#still-layer .agent-pointer-arrow {
+  fill: rgb(var(--still-agent-rgb));
+  stroke: #fff;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.agent-pointer-label {
+  position: absolute;
+  left: 24px;
+  top: 27px;
+  max-width: 260px;
+  display: flex;
+  gap: 5px;
+  padding: 5px 10px;
+  overflow: hidden;
+  color: var(--still-text);
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--still-pill-strong);
+  border: 1px solid rgba(var(--still-agent-rgb), .55);
+  border-radius: 10px;
+  box-shadow: var(--still-shadow);
+  transform-origin: top left;
+  transition: scale 200ms var(--still-ease-out-strong);
+}
+#still-agent-pointer.flip .agent-pointer-label { left: auto; right: 2px; transform-origin: top right; }
+#still-agent-pointer:not(.visible) .agent-pointer-label { scale: .92; }
+.agent-pointer-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 640;
+}
+
+/* The ring around what the agent is using. */
+#still-agent-focus {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 39;
+  border: 2px solid rgba(var(--still-agent-rgb), .9);
+  border-radius: 9px;
+  box-shadow: 0 0 0 4px rgba(var(--still-agent-rgb), .16), 0 0 18px rgba(var(--still-agent-rgb), .35);
+  opacity: 0;
+  scale: 1.06;
+  pointer-events: none;
+  transition: opacity 260ms var(--still-ease-out), scale 260ms var(--still-ease-out-strong),
+    translate 240ms var(--still-ease-out-strong), width 240ms var(--still-ease-out-strong), height 240ms var(--still-ease-out-strong);
+}
+#still-agent-focus:not(.visible) { transition-property: opacity, scale; }
+#still-agent-focus.visible { opacity: 1; scale: 1; transition-duration: 160ms, 220ms, 240ms, 240ms, 240ms; }
+
+.agent-ripple {
+  position: absolute;
+  z-index: 38;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 2px solid rgb(var(--still-agent-rgb));
+  background: rgba(var(--still-agent-rgb), .18);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Steps without an element, told at the bottom left. */
+#still-agent-narration {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 38;
+  max-width: min(460px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 7px 10px;
+  color: var(--still-text);
+  font-size: 12px;
+  background: var(--still-pill-strong);
+  border: 1px solid var(--still-line);
+  border-radius: 12px;
+  box-shadow: var(--still-shadow);
+  opacity: 0;
+  translate: 0 8px;
+  pointer-events: none;
+  transition: opacity 180ms var(--still-ease-out), translate 220ms var(--still-ease-out-strong);
+}
+#still-agent-narration.visible { opacity: 1; translate: 0 0; }
+.agent-narration-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#still-layer .agent-narration-star { width: 20px; height: 20px; flex: 0 0 20px; margin: -3px -2px -3px -4px; color: rgb(var(--still-agent-rgb)); }
+#still-layer .agent-narration-star .agent-star { fill: currentColor; stroke: none; }
+#still-layer.agent-acting .agent-narration-star { animation: still-agent-spin 1.5s linear infinite; }
+@keyframes still-agent-spin { to { rotate: 360deg; } }
+
+/* Panel: live status, the agent's tabs (draggable into the slots), steps. */
+.agent-panel-status { display: flex; align-items: center; gap: 7px; }
+.agent-status-light {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--still-muted) 70%, transparent);
+  transition: background-color 200ms var(--still-ease-out);
+}
+.agent-panel-head.working .agent-status-light {
+  background: rgb(var(--still-agent-rgb));
+  animation: still-agent-pulse 900ms var(--still-ease-in-out) infinite alternate;
+}
+.agent-panel-head.working .agent-status-text { color: var(--still-text); }
+
+.agent-tab-row[draggable] { cursor: grab; }
+.agent-tab-row.dragging { opacity: .45; }
+#still-layer .agent-tab-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: -2px; }
+.agent-tab-icon { position: relative; width: 18px; height: 18px; display: grid; place-items: center; }
+.agent-tab-row.working .agent-tab-icon::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 7px;
+  border: 1.5px solid rgba(var(--still-agent-rgb), .95);
+  animation: still-agent-pulse 900ms var(--still-ease-in-out) infinite alternate;
+}
+
+.agent-steps {
+  display: grid;
+  gap: 1px;
+  max-height: 232px;
+  margin: 0 0 4px;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  list-style: none;
+}
+.agent-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  transition: background-color 200ms var(--still-ease-out);
+}
+.agent-step.current { background: rgba(var(--still-agent-rgb), .12); }
+#still-layer .agent-step-favicon { width: 16px; height: 16px; border-radius: 4px; font-size: 10px; }
+#still-layer .agent-step-favicon.placeholder svg { width: 11px; height: 11px; }
+#still-layer .agent-step-favicon .agent-star { fill: currentColor; stroke: none; }
+.agent-step-copy { min-width: 0; display: grid; gap: 1px; }
+.agent-step-text,
+.agent-step-place { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-step-text { font-size: 12.5px; }
+.agent-step-place { color: var(--still-muted); font-size: 11px; }
+.agent-step-time {
+  min-width: 34px;
+  color: var(--still-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #still-chrome .slot.agent-busy .slot-icon::after,
+  .agent-panel-head.working .agent-status-light,
+  .agent-tab-row.working .agent-tab-icon::after,
+  #still-layer.agent-acting .agent-narration-star { animation: none; }
+  #still-agent-focus,
+  #still-agent-narration,
+  .agent-pointer-label { scale: 1 !important; transition: opacity 150ms var(--still-ease-out) !important; }
+  #still-agent-narration { translate: 0 0; }
 }

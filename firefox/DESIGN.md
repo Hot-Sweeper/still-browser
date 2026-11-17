@@ -37,11 +37,48 @@ the window controls slide in from the top edge when the pointer reaches it.
 - Each glyph has its own hover motion: minimize nudges down, close turns 90°,
   and maximize grows.
 
+## Rearranging slots
+- A slot is picked up after 5 px of movement. It lifts (scale 1.045, a
+  deeper shadow), follows the pointer one to one, moves a little vertically
+  under resistance, and leans up to 3° with its speed. Past the first or
+  last place it rubber-bands.
+- The other slots make room on springs (`ROOM_SPRING`, ω 30, ζ .86) as soon
+  as the dragged slot crosses half a slot. Letting go drops it from where it
+  is with its release speed (`DROP_SPRING`, ω 24, ζ .8); the lift settles on
+  `--still-ease-spring`. Springs retarget from their current state, so
+  nothing restarts. Motion uses `translate` and `rotate`, never `transform`
+  (the bar's entrance owns that). The current slot's aura rides along.
+- Escape puts the slot back. Ctrl+Shift+Left/Right moves the focused slot
+  on the same springs, and a screen reader hears where it went.
+- Drops onto the row: a link, text or file from a page shows "Open here" on
+  a page slot and "Open in a new slot" on an empty one, inside the slot.
+  An agent tab dragged from the agent panel makes the slots part around a
+  dashed placeholder; with all five in use the slot under it turns red and
+  says "Replace", and the toast offers Undo.
+
 ## Agents
+- The agent has its own colour, `--still-agent-rgb` (green, lighter in dark
+  mode), used for its pointer, rings and lights. The bar's aura stays sage.
 - The agent mark (a four-point star) appears only while an agent is
   connected. It breathes at rest and turns while the agent works. When the
-  agent stops, it eases on to the next resting angle.
-- The agent panel reuses the utility panel's surface.
+  agent stops, it eases on to the next resting angle. The agent's hidden
+  tabs sit beside the mark as overlapping 16 px icons (three, then a count);
+  the one it works in is ringed.
+- On the page in front of you the agent has a pointer: an arrow in the
+  agent colour with a white rim, gliding on a spring (ω 21, ζ .9) to the
+  element it is about to use. A label beside it says the step and the
+  element ("Clicking “Sign in”"), a ring outlines the element, and a click
+  spreads a ring from the tip. The agent waits 220 ms (`AIM_MS`) so the
+  pointer arrives first. It fades 2.6 s after the last step and leaves when
+  you switch slots.
+- Steps without an element ("Reading the page") are told in a line at the
+  bottom left, with a turning star.
+- A slot behind the current one that the agent works in is outlined, and a
+  small light pulses on its icon (it dims to 45%, never off).
+- The agent panel reuses the utility panel's surface: a live status line
+  with a light, the agent tabs (drag them into the slots, or click to show
+  one), and the recent steps with where each happened and when. Repeats of
+  one step on one page update a single entry; new steps slide in on top.
 - A 2 px light runs along the top edge while the agent acts on the visible
   page. It loops by exactly one tile, so it never jumps.
 - Reduced motion keeps the colour changes and drops movement.

@@ -28,6 +28,9 @@ const PREF_DEBUG = "still.agent.debug";
 const SANDBOX = "still-agent";
 const IDLE_STOP_MS = 3 * 60 * 1000;
 const CALL_TIMEOUT_MS = 30000;
+// How long the agent waits for Still's pointer to reach an element on the
+// page in front of you before acting, so you can follow what it does.
+const AIM_MS = 220;
 const encoder = new TextEncoder();
 
 const KEYS = {
@@ -657,7 +660,11 @@ class Bridge {
       const inside = (node) => { for (let n = node; n; n = n.parentNode || n.host) if (n === element) return true; return false; };
       const covered = rect.width && rect.height && hit && !inside(hit) && !hit.contains(element)
         ? (hit.getAttribute("aria-label") || hit.textContent || hit.tagName).trim().replace(/\\s+/g, " ").slice(0, 60) : "";
-      return { element, x, y, width: rect.width, height: rect.height, covered,
+      const labelled = element.getAttribute("aria-labelledby")?.split(/\\s+/).map((id) => document.getElementById(id)?.textContent || "").join(" ");
+      const name = (element.getAttribute("aria-label") || labelled || element.labels?.[0]?.textContent
+        || element.getAttribute("placeholder") || element.getAttribute("title") || element.getAttribute("alt")
+        || (element.type === "password" ? "" : element.innerText || element.value) || "").trim().replace(/\\s+/g, " ").slice(0, 48);
+      return { element, x, y, width: rect.width, height: rect.height, covered, name,
         tag: element.tagName.toLowerCase(), type: element.type || "", disabled: !!element.disabled };
     }`, [{ type: "string", value: ref }, { type: "boolean", value: scroll }]);
     const value = unpack(result, true);
@@ -699,8 +706,21 @@ class Bridge {
     return result;
   }
 
-  touch(tab, label) {
-    this.updateUi({ tab: tab.linkedBrowser.browserId, label });
+  // Tell the window what the agent is doing. `target` is what it acts on
+  // (an element's name), `box` its place in the top page, so Still can show
+  // the agent's pointer there when the page is the one in front of you.
+  touch(tab, label, { target = "", box = null } = {}) {
+    const win = stillWindow();
+    this.updateUi({ tab: tab.linkedBrowser.browserId, label, target, box });
+    try { return Boolean(win?.StillChrome.agent?.onScreen(tab)); } catch { return false; }
+  }
+
+  // Act on a located element: report it, and when the page is in front of
+  // the person, give Still's agent pointer a moment to arrive first.
+  async aim(tab, located, label) {
+    const top = located.context === contextIdForTab(tab);
+    const box = top ? { x: located.x - located.width / 2, y: located.y - located.height / 2, width: located.width, height: located.height } : null;
+    if (this.touch(tab, label, { target: located.name, box }) && box) await sleep(AIM_MS);
   }
 }
 
@@ -815,6 +835,7 @@ const METHODS = {
   async "tabs.close"({ tab: id }) {
     const tab = tabById(id);
     const info = describeTab(tab);
+    this.touch(tab, "Closed a tab", { target: info.title });
     tab.ownerDocument.defaultView.gBrowser.removeTab(tab, { animate: false });
     return { closed: info };
   },
@@ -823,7 +844,9 @@ const METHODS = {
     const tab = tabById(id);
     const bidi = await this.engine();
     const context = contextIdForTab(tab);
-    this.touch(tab, "Navigating");
+    let host = "";
+    try { host = url ? new URL(/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`).hostname.replace(/^www\./, "") : ""; } catch {}
+    this.touch(tab, action === "back" ? "Going back" : action === "forward" ? "Going forward" : action === "reload" ? "Reloading" : "Opening", { target: action ? "" : host });
     if (action === "back" || action === "forward") {
       await bidi.send("browsingContext.traverseHistory", { context, delta: action === "back" ? -1 : 1 });
     } else if (action === "reload") {
@@ -871,6 +894,7 @@ const METHODS = {
     const tab = tabById(id);
     const bidi = await this.engine();
     const context = contextIdForTab(tab);
+    this.touch(tab, "Looking at the page");
     const params = { context, origin: full_page ? "document" : "viewport", format: { type: "image/png" } };
     if (ref) {
       const located = await this.locate(tab, ref);
@@ -905,6 +929,7 @@ const METHODS = {
     const tab = tabById(id);
     if (time) await sleep(Math.min(Number(time) * 1000, 60000));
     if (!text && !gone) return { tab: describeTab(tab) };
+    this.touch(tab, text ? "Waiting for" : "Waiting until gone", { target: String(text || gone).slice(0, 48) });
     const context = contextIdForTab(tab);
     const end = Date.now() + Math.min(timeout, 120000);
     while (Date.now() < end) {
@@ -928,7 +953,7 @@ const METHODS = {
     const tab = tabById(id);
     const target = await this.locate(tab, ref);
     if (target.covered && !force) throw fail(`Element ${ref} is covered by "${target.covered}". Close it first, or pass force to click anyway.`, "covered");
-    this.touch(tab, "Clicking");
+    await this.aim(tab, target, double ? "Double-clicking" : button === "right" ? "Right-clicking" : "Clicking");
     const buttonId = { left: 0, middle: 1, right: 2 }[button] ?? 0;
     const mods = modifiers.map(keyValue);
     if (mods.length) await (await this.engine()).send("input.performActions", { context: target.context, actions: [{ type: "key", id: "still-keys", actions: mods.map((value) => ({ type: "keyDown", value })) }] });
@@ -944,6 +969,7 @@ const METHODS = {
   async "input.hover"({ tab: id, ref }) {
     const tab = tabById(id);
     const target = await this.locate(tab, ref);
+    await this.aim(tab, target, "Pointing at");
     await this.pointer(target.context, [{ type: "pointerMove", x: Math.round(target.x), y: Math.round(target.y), duration: 80 }]);
     return { tab: describeTab(tab) };
   },
@@ -955,13 +981,14 @@ const METHODS = {
       const target = await this.locate(tab, ref);
       if (target.covered) throw fail(`Element ${ref} is covered by "${target.covered}".`, "covered");
       context = target.context;
-      this.touch(tab, "Typing");
+      await this.aim(tab, target, "Typing in");
       await this.pointer(context, [{ type: "pointerMove", x: Math.round(target.x), y: Math.round(target.y) }, { type: "pointerDown", button: 0 }, { type: "pointerUp", button: 0 }]);
       if (clear) {
         const isMac = Services.appinfo.OS === "Darwin";
         await this.keys(context, [...keyActions(isMac ? "Meta+a" : "Control+a"), { type: "keyDown", value: "" }, { type: "keyUp", value: "" }]);
       }
     }
+    if (!ref) this.touch(tab, "Typing");
     const actions = textActions(String(text));
     if (slowly) for (const action of actions) if (action.type === "keyUp") action.pause = 40;
     for (let i = 0; i < actions.length; i += 400) await this.keys(context, actions.slice(i, i + 400));
@@ -989,7 +1016,7 @@ const METHODS = {
 
   async "input.press"({ tab: id, keys }) {
     const tab = tabById(id);
-    this.touch(tab, "Pressing keys");
+    this.touch(tab, "Pressing", { target: String(keys).trim().slice(0, 40) });
     const context = contextIdForTab(tab);
     for (const combo of String(keys).split(/\s+/).filter(Boolean)) await this.keys(context, keyActions(combo));
     await sleep(120);
@@ -1000,7 +1027,7 @@ const METHODS = {
   async "input.select"({ tab: id, ref, values = [] }) {
     const tab = tabById(id);
     const target = await this.locate(tab, ref);
-    this.touch(tab, "Choosing an option");
+    await this.aim(tab, target, "Choosing in");
     const result = await this.call(target.context, `(el, wanted) => {
       if (el.tagName !== "SELECT") throw new Error("Not a select element; click it and pick from the list instead");
       const picked = [];
@@ -1031,6 +1058,7 @@ const METHODS = {
       x = Math.round(size[0] / 2);
       y = Math.round(size[1] / 2);
     }
+    this.touch(tab, "Scrolling");
     const delta = Number(amount) || 600;
     const deltaX = direction === "left" ? -delta : direction === "right" ? delta : 0;
     const deltaY = direction === "up" ? -delta : direction === "down" ? delta : 0;
@@ -1044,6 +1072,7 @@ const METHODS = {
     const tab = tabById(id);
     const start = await this.locate(tab, from);
     const end = await this.locate(tab, to, { scroll: false });
+    await this.aim(tab, start, "Dragging");
     const steps = [{ type: "pointerMove", x: Math.round(start.x), y: Math.round(start.y) }, { type: "pointerDown", button: 0 }];
     for (let i = 1; i <= 8; i++) {
       steps.push({ type: "pointerMove", x: Math.round(start.x + (end.x - start.x) * i / 8), y: Math.round(start.y + (end.y - start.y) * i / 8), duration: 30 });
@@ -1057,6 +1086,7 @@ const METHODS = {
     const tab = tabById(id);
     for (const file of paths) if (!(await IOUtils.exists(file))) throw fail(`File not found: ${file}`, "no_file");
     const target = await this.locate(tab, ref, { scroll: false });
+    this.touch(tab, "Uploading", { target: paths.length === 1 ? PathUtils.filename(paths[0]) : `${paths.length} files` });
     const bidi = await this.engine();
     // Firefox only lets a page's process build File objects from paths while
     // dom.file.createInChild is on (automation normally leaves it on). Turn

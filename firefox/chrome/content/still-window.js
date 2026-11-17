@@ -480,7 +480,8 @@
   }
 
   function buildPill(tab) {
-    const pill = h("div", { class: "slot", role: "button", tabindex: "0", draggable: "true" });
+    const pill = h("div", { class: "slot", role: "button", tabindex: "0",
+      "aria-keyshortcuts": "Control+Shift+ArrowLeft Control+Shift+ArrowRight" });
     pill.stillTab = tab;
     const icon = h("span", { class: "slot-icon" });
     const title = h("span", { class: "slot-title" });
@@ -489,7 +490,7 @@
       event.stopPropagation();
       closeSlot(pill.stillTab);
     });
-    pill.append(icon, title, close);
+    pill.append(icon, title, close, h("span", { class: "slot-drop-hint", "aria-hidden": "true" }));
     pill.addEventListener("click", (event) => {
       if (event.target.closest("button, input, form")) return;
       activate(pill.stillTab);
@@ -502,6 +503,13 @@
     });
     pill.addEventListener("keydown", (event) => {
       if (event.target !== pill) return;
+      if (event.ctrlKey && event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveSlot(pill.stillTab, slotIndex(pill.stillTab) + (event.key === "ArrowLeft" ? -1 : 1));
+        pill.focus({ preventScroll: true });
+        return;
+      }
       if (event.key === "Enter") beginEdit(pill.stillTab);
       else if (event.key === " ") { event.preventDefault(); activate(pill.stillTab); }
     });
@@ -510,7 +518,7 @@
     pill.addEventListener("pointerleave", () => auraHover(pill, false));
     pill.addEventListener("pointerdown", (event) => { if (event.button === 0 && !event.target.closest("button")) auraPress(pill); });
     pill.addEventListener("keydown", (event) => { if (!event.repeat && event.target === pill && (event.key === "Enter" || event.key === " ")) auraPress(pill); });
-    attachDrag(pill);
+    attachReorder(pill);
     return pill;
   }
 
@@ -528,15 +536,7 @@
     pill.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
     });
-    pill.addEventListener("dragover", (event) => {
-      if (!state.draggedTab) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-    });
-    pill.addEventListener("drop", (event) => {
-      event.preventDefault();
-      if (state.draggedTab) moveSlot(state.draggedTab, slotTabs().length - 1);
-    });
+    pill.append(h("span", { class: "slot-drop-hint", "aria-hidden": "true" }));
     emptyPills[index] = pill;
     return pill;
   }
@@ -598,58 +598,517 @@
   }
 
   // ------------------------------------------------------------- reordering
+  // Slots are picked up with the pointer. After a few pixels the slot lifts,
+  // follows the pointer one to one and leans into its motion, while the
+  // others slide aside on springs to open the place where it will land.
+  // Letting go drops it there from wherever it is, keeping its speed, so the
+  // motion never restarts. Escape puts it back. Ctrl+Shift+Left and Right
+  // move the focused slot without dragging.
 
-  function attachDrag(pill) {
-    pill.addEventListener("dragstart", (event) => {
-      if (event.target.closest("button, input, form") || state.editingTab === pill.stillTab) {
-        event.preventDefault();
-        return;
-      }
-      state.draggedTab = pill.stillTab;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/x-still-slot", String(slotIndex(pill.stillTab)));
-      pill.classList.add("dragging");
-      showChrome();
-    });
-    pill.addEventListener("dragover", (event) => {
-      if (!state.draggedTab || state.draggedTab === pill.stillTab) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      pill.classList.add("drop-target");
-    });
-    pill.addEventListener("dragleave", () => pill.classList.remove("drop-target"));
-    pill.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const dragged = state.draggedTab;
-      state.draggedTab = null;
-      if (dragged && dragged !== pill.stillTab) moveSlot(dragged, slotIndex(pill.stillTab));
-    });
-    pill.addEventListener("dragend", () => {
-      state.draggedTab = null;
-      for (const node of slotRow.querySelectorAll(".dragging, .drop-target")) node.classList.remove("dragging", "drop-target");
-      scheduleChromeHide();
-    });
+  const REORDER_THRESHOLD = 5;
+  const ROOM_SPRING = { omega: 30, zeta: 0.86 };   // slots making room
+  const DROP_SPRING = { omega: 24, zeta: 0.8 };    // a slot settling after release
+  const LEAN_SPRING = { omega: 22, zeta: 0.9 };
+  const slotMotion = new Map();                    // pill -> spring state
+  let reorder = null;
+  let motionFrame = 0;
+  let motionAt = 0;
+  const slotLive = h("span", { class: "visually-hidden", role: "status", "aria-live": "polite" });
+  layer.append(slotLive);
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
   }
 
+  // Past its limits a value gives less and less, like pulling on rubber.
+  function rubber(value, min, max, reach = 36) {
+    const past = value < min ? min - value : value > max ? value - max : 0;
+    if (!past) return value;
+    const give = reach * (1 - 1 / (past * 0.55 / reach + 1));
+    return value < min ? min - give : max + give;
+  }
+
+  function motionOf(pill) {
+    let m = slotMotion.get(pill);
+    if (!m) {
+      const title = pill.querySelector(".slot-title");
+      m = { x: 0, v: 0, target: 0, y: 0, vy: 0, rot: 0, vr: 0, lean: 0, held: false, spring: ROOM_SPRING,
+        left: pill.offsetLeft, titleLeft: title ? title.offsetLeft : 0 };
+      slotMotion.set(pill, m);
+    }
+    return m;
+  }
+
+  function springStep(position, velocity, target, { omega, zeta }, dt) {
+    const acceleration = -omega * omega * (position - target) - 2 * zeta * omega * velocity;
+    velocity += acceleration * dt;
+    return [position + velocity * dt, velocity];
+  }
+
+  function kickMotion() {
+    if (motionFrame) return;
+    motionAt = performance.now();
+    motionFrame = window.requestAnimationFrame(stepMotion);
+  }
+
+  function stepMotion(now) {
+    motionFrame = 0;
+    const elapsed = Math.min(0.05, Math.max(0, (now - motionAt) / 1000));
+    motionAt = now;
+    const instant = !animationsAllowed();
+    if (reorder?.active && now - reorder.lastAt > 40) {
+      // The pointer rests: the lean fades as the speed does.
+      reorder.velocity *= Math.exp(-elapsed * 10);
+      motionOf(reorder.pill).lean = instant ? 0 : clamp(reorder.velocity / 300, -3, 3);
+    }
+    for (const [pill, m] of slotMotion) {
+      if (instant) {
+        if (!m.held) { m.x = m.target; m.y = 0; }
+        m.v = m.vy = m.vr = m.rot = 0;
+      } else {
+        // Small fixed steps keep the springs stable on slow frames.
+        let left = elapsed;
+        while (left > 0) {
+          const dt = Math.min(left, 1 / 240);
+          left -= dt;
+          if (!m.held) {
+            [m.x, m.v] = springStep(m.x, m.v, m.target, m.spring, dt);
+            [m.y, m.vy] = springStep(m.y, m.vy, 0, m.spring, dt);
+          }
+          [m.rot, m.vr] = springStep(m.rot, m.vr, m.held ? m.lean : 0, LEAN_SPRING, dt);
+        }
+      }
+      const settled = !m.held && Math.abs(m.x - m.target) < 0.3 && Math.abs(m.v) < 8
+        && Math.abs(m.y) < 0.3 && Math.abs(m.vy) < 8 && Math.abs(m.rot) < 0.05 && Math.abs(m.vr) < 1;
+      if (settled && !m.target) {
+        pill.style.removeProperty("translate");
+        pill.style.removeProperty("rotate");
+        slotMotion.delete(pill);
+        continue;
+      }
+      if (settled) { m.x = m.target; m.v = 0; }
+      pill.style.translate = `${m.x.toFixed(2)}px ${m.y.toFixed(2)}px`;
+      pill.style.rotate = `${m.rot.toFixed(3)}deg`;
+      // The light seen through each slot's glass follows the slot.
+      pill.style.setProperty("--pill-x", `${m.left + m.x}px`);
+      pill.querySelector(".slot-title")?.style.setProperty("--title-x", `${m.left + m.x + m.titleLeft}px`);
+    }
+    auraFollowMotion();
+    const busy = [...slotMotion.values()].some((m) => m.held || m.x !== m.target || m.v || m.y || m.rot);
+    if (busy) motionFrame = window.requestAnimationFrame(stepMotion);
+    else if (!reorder?.active && !dropPreview) settleMotion();
+  }
+
+  // The current slot's light rides along while its slot is moving.
+  function auraFollowMotion() {
+    const pill = pills.get(gBrowser.selectedTab);
+    const m = pill && slotMotion.get(pill);
+    if (!m) return;
+    aura.animation?.cancel();
+    aura.animation = null;
+    aura.index = slotTabs().indexOf(gBrowser.selectedTab);
+    chrome.style.setProperty("--still-aura-x", `${m.left + m.x}px`);
+  }
+
+  function settleMotion() {
+    for (const [pill] of slotMotion) {
+      pill.style.removeProperty("translate");
+      pill.style.removeProperty("rotate");
+    }
+    slotMotion.clear();
+    slotRow.classList.remove("reordering");
+    placeShimmerAnchors();
+    if (aura.index >= 0) auraMove(aura.index, true, true);
+  }
+
+  // After the row's order changes, each slot keeps its place on screen and
+  // springs from there to its new home.
+  function rebaseMotion(visual) {
+    for (const [pill, left] of visual) {
+      if (!pill.isConnected) continue;
+      const m = motionOf(pill);
+      m.left = pill.offsetLeft;
+      const title = pill.querySelector(".slot-title");
+      m.titleLeft = title ? title.offsetLeft : 0;
+      m.x = left - m.left;
+      m.target = 0;
+    }
+  }
+
+  function visualLefts() {
+    return new Map([...slotRow.children].map((pill) => [pill, pill.offsetLeft + (slotMotion.get(pill)?.x || 0)]));
+  }
+
+  function attachReorder(pill) {
+    pill.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || reorder || dropPreview || event.target.closest("button, input, form")
+          || state.editingTab === pill.stillTab || slotTabs().length < 2) return;
+      reorder = { pill, tab: pill.stillTab, id: event.pointerId, startX: event.clientX, startY: event.clientY, active: false };
+      try { pill.setPointerCapture(event.pointerId); } catch {}
+    });
+    pill.addEventListener("pointermove", (event) => {
+      if (reorder?.pill !== pill || event.pointerId !== reorder.id) return;
+      if (!reorder.active) {
+        if (Math.hypot(event.clientX - reorder.startX, event.clientY - reorder.startY) < REORDER_THRESHOLD) return;
+        beginReorder(event);
+      }
+      dragReorder(event);
+    });
+    const end = (event, cancel) => {
+      if (reorder?.pill === pill && event.pointerId === reorder.id) finishReorder({ cancel });
+    };
+    pill.addEventListener("pointerup", (event) => end(event, false));
+    pill.addEventListener("pointercancel", (event) => end(event, true));
+    pill.addEventListener("lostpointercapture", (event) => end(event, false));
+  }
+
+  function beginReorder(event) {
+    const r = reorder;
+    r.active = true;
+    r.tabs = slotTabs();
+    r.list = r.tabs.map((tab) => pills.get(tab));
+    r.from = r.to = r.tabs.indexOf(r.tab);
+    for (const pill of r.list) { const m = motionOf(pill); m.left = pill.offsetLeft; }
+    r.lefts = r.list.map((pill) => pill.offsetLeft);
+    r.step = r.lefts.length > 1 ? r.lefts[1] - r.lefts[0] : r.pill.offsetWidth;
+    const m = motionOf(r.pill);
+    m.held = true;
+    m.v = m.vy = 0;
+    // A slot caught while it is still settling continues from where it is.
+    r.baseX = m.x - (event.clientX - r.startX);
+    r.baseY = m.y - (event.clientY - r.startY);
+    r.lastX = event.clientX;
+    r.lastAt = performance.now();
+    r.velocity = 0;
+    state.draggedTab = r.tab;
+    finishEdit({ animate: false });
+    showChrome();
+    clearTimeout(state.hideTimer);
+    slotRow.classList.add("reordering");
+    r.pill.classList.add("lifted");
+  }
+
+  function dragReorder(event) {
+    const r = reorder;
+    const m = motionOf(r.pill);
+    const now = performance.now();
+    const dt = Math.max(4, now - r.lastAt);
+    r.velocity = r.velocity * 0.55 + ((event.clientX - r.lastX) / dt * 1000) * 0.45;
+    r.lastX = event.clientX;
+    r.lastAt = now;
+    const min = r.lefts[0] - r.lefts[r.from];
+    const max = r.lefts[r.lefts.length - 1] - r.lefts[r.from];
+    m.x = rubber(r.baseX + event.clientX - r.startX, min, max);
+    // Vertical movement is allowed a little, so the slot reads as picked up.
+    m.y = rubber((r.baseY + event.clientY - r.startY) * 0.35, -4, 8, 10);
+    m.lean = animationsAllowed() ? clamp(r.velocity / 300, -3, 3) : 0;
+    const to = clamp(Math.round((r.lefts[r.from] + m.x - r.lefts[0]) / r.step), 0, r.list.length - 1);
+    if (to !== r.to) {
+      r.to = to;
+      r.list.forEach((pill, index) => {
+        if (pill === r.pill) return;
+        let shift = 0;
+        if (r.from < to && index > r.from && index <= to) shift = -r.step;
+        else if (to < r.from && index >= to && index < r.from) shift = r.step;
+        const other = motionOf(pill);
+        other.target = shift;
+        other.spring = ROOM_SPRING;
+      });
+    }
+    kickMotion();
+  }
+
+  // The click that ends a drag must not also switch to the slot.
+  function swallowNextClick() {
+    const swallow = (event) => { event.stopPropagation(); event.preventDefault(); };
+    window.addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+  }
+
+  function finishReorder({ cancel = false } = {}) {
+    const r = reorder;
+    reorder = null;
+    if (!r) return;
+    try { r.pill.releasePointerCapture(r.id); } catch {}
+    if (!r.active) return;
+    swallowNextClick();
+    state.draggedTab = null;
+    r.pill.classList.remove("lifted");
+    const m = motionOf(r.pill);
+    m.held = false;
+    m.spring = DROP_SPRING;
+    m.v = cancel ? 0 : clamp(r.velocity, -2400, 2400);
+    m.vy = 0;
+    const tabs = slotTabs();
+    const to = cancel ? r.from : r.to;
+    const target = tabs[to];
+    if (to !== r.from && target && target !== r.tab && tabs.includes(r.tab)) {
+      const visual = visualLefts();
+      gBrowser.moveTabTo(r.tab, { tabIndex: tabPos(target), forceUngrouped: true });
+      aura.index = slotTabs().indexOf(gBrowser.selectedTab);
+      renderSlots();
+      rebaseMotion(visual);
+      slotLive.textContent = `${slotTitle(r.tab)} moved to slot ${slotIndex(r.tab) + 1}`;
+    } else {
+      for (const pill of r.list) motionOf(pill).target = 0;
+    }
+    for (const pill of r.list) if (pill !== r.pill) motionOf(pill).spring = ROOM_SPRING;
+    kickMotion();
+    if (!revealOpen) scheduleChromeHide(900);
+  }
+
+  // ----------------------------------------------------------------- drops
+  // Links, text and files dragged from a page can be dropped on the slots:
+  // on a page slot they open there, on an empty one in a new slot. The
+  // agent's tabs can be dragged from its panel into the row: the slots make
+  // room and a placeholder shows where it lands (or, with all five in use,
+  // the slot it would replace says so). The bar opens when a drag reaches
+  // the top edge.
+
+  const AGENT_TAB_TYPE = "application/x-still-agent-tab";
+  const LINK_TYPES = ["text/x-moz-url", "text/uri-list", "text/plain", "application/x-moz-file"];
+  let dropPreview = null;
+  let dropLeaveTimer = 0;
+  state.draggingAgentTab = null;
+
+  const dropGhost = h("div", { class: "still-slot-ghost", "aria-hidden": "true" });
+  chrome.append(dropGhost);
+
+  function dropKind(event) {
+    const types = [...(event.dataTransfer?.types || [])];
+    if (types.includes(AGENT_TAB_TYPE)) return "agent";
+    return LINK_TYPES.some((type) => types.includes(type)) ? "link" : null;
+  }
+
+  // Which slot the pointer is over, by the row's layout (not by the slots'
+  // current, possibly shifted, positions), so the preview never flickers.
+  function dropIndexAt(clientX) {
+    const row = slotRow.getBoundingClientRect();
+    const x = clientX - row.left;
+    const nodes = [...slotRow.children];
+    const gap = nodes.length > 1 ? nodes[1].offsetLeft - nodes[0].offsetLeft - nodes[0].offsetWidth : 0;
+    for (let index = 0; index < nodes.length; index++) {
+      if (x < nodes[index].offsetLeft + nodes[index].offsetWidth + gap / 2) return index;
+    }
+    return nodes.length - 1;
+  }
+
+  function dropPlan(kind, index) {
+    const tabs = slotTabs();
+    const tab = tabs[index] || null;
+    if (kind === "link") return { kind, index, tab, mode: tab ? "load" : "new", hint: tab ? "Open here" : "Open in a new slot" };
+    const agentTab = state.draggingAgentTab;
+    if (tabs.length >= SLOT_COUNT) return { kind, index, tab, mode: "replace", hint: "Replace" };
+    return { kind, index: Math.min(index, tabs.length), tab, mode: "insert", hint: "", agentTab };
+  }
+
+  function setDropPreview(plan) {
+    const same = plan && dropPreview && plan.mode === dropPreview.mode && plan.index === dropPreview.index && plan.kind === dropPreview.kind;
+    if (same) return;
+    for (const node of slotRow.querySelectorAll(".drop-load, .drop-new, .drop-replace, .drop-consumed")) {
+      node.classList.remove("drop-load", "drop-new", "drop-replace", "drop-consumed");
+    }
+    dropPreview = plan;
+    const occupied = slotTabs().map((tab) => pills.get(tab)).filter(Boolean);
+    if (plan) slotRow.classList.add("reordering");
+    occupied.forEach((pill, index) => {
+      const m = motionOf(pill);
+      m.left = pill.offsetLeft;
+      m.target = plan?.mode === "insert" && index >= plan.index ? pill.offsetWidth + gapOf() : 0;
+      m.spring = ROOM_SPRING;
+    });
+    if (plan?.mode === "insert") {
+      // The first empty slot is where the row's last slot moves to.
+      slotRow.children[occupied.length]?.classList.add("drop-consumed");
+      placeGhost(plan);
+    } else {
+      dropGhost.classList.remove("visible");
+      const node = plan ? slotRow.children[plan.index] : null;
+      if (node) {
+        node.classList.add(`drop-${plan.mode}`);
+        const hint = node.querySelector(".slot-drop-hint");
+        if (hint) hint.textContent = plan.hint;
+      }
+    }
+    kickMotion();
+  }
+
+  function gapOf() {
+    return parseFloat(getComputedStyle(slotRow).columnGap) || 8;
+  }
+
+  function placeGhost(plan) {
+    const node = slotRow.children[plan.index];
+    if (!node) return;
+    const tab = plan.agentTab;
+    dropGhost.replaceChildren(
+      tab ? faviconFor(tab) : h("span", { class: "slot-favicon placeholder", text: "+" }),
+      h("span", { class: "slot-title-plain", text: tab ? slotTitle(tab) : "Agent tab" }));
+    dropGhost.style.left = `${slotRow.offsetLeft + node.offsetLeft}px`;
+    dropGhost.style.top = `${slotRow.offsetTop + node.offsetTop}px`;
+    dropGhost.style.width = `${node.offsetWidth}px`;
+    dropGhost.style.height = `${node.offsetHeight}px`;
+    dropGhost.classList.add("visible");
+  }
+
+  function clearDropPreview() {
+    clearTimeout(dropLeaveTimer);
+    if (!dropPreview) return;
+    setDropPreview(null);
+  }
+
+  function onDragOver(event) {
+    const kind = dropKind(event);
+    if (!kind || reorder?.active) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearTimeout(dropLeaveTimer);
+    clearTimeout(state.hideTimer);
+    if (!chrome.classList.contains("open")) showChrome(event.clientX / window.innerWidth);
+    event.dataTransfer.dropEffect = kind === "agent" ? "move" : "link";
+    setDropPreview(dropPlan(kind, dropIndexAt(event.clientX)));
+  }
+
+  slotRow.addEventListener("dragenter", onDragOver);
+  slotRow.addEventListener("dragover", onDragOver);
+  slotRow.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && slotRow.contains(event.relatedTarget)) return;
+    clearTimeout(dropLeaveTimer);
+    dropLeaveTimer = setTimeout(clearDropPreview, 70);
+  });
+  slotRow.addEventListener("drop", (event) => {
+    const kind = dropKind(event);
+    if (!kind) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const plan = dropPlan(kind, dropIndexAt(event.clientX));
+    if (kind === "agent") {
+      const id = Number(event.dataTransfer.getData(AGENT_TAB_TYPE));
+      const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browserId === id);
+      placeAgentTab(tab, plan);
+    } else {
+      dropLink(event, plan);
+      clearDropPreview();
+    }
+    scheduleChromeHide(1400);
+  });
+
+  // A drag from the page reaching the top edge opens the bar.
+  reveal.addEventListener("dragenter", (event) => {
+    if (dropKind(event)) showChrome(event.clientX / window.innerWidth);
+  });
+  chrome.addEventListener("dragover", (event) => {
+    if (dropKind(event)) clearTimeout(state.hideTimer);
+  });
+  chrome.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && chrome.contains(event.relatedTarget)) return;
+    if (!state.draggingAgentTab && !revealOpen) scheduleChromeHide(500);
+  });
+
+  function dropLink(event, plan) {
+    let links = [];
+    // `true` refuses javascript: and data: links, as Firefox's tab bar does.
+    try { links = Services.droppedLinkHandler.dropLinks(event, true); } catch {}
+    const link = links?.find((item) => item.url);
+    if (!link) return;
+    const raw = link.url.trim();
+    const address = /^[a-z][a-z0-9+.-]*:\S+$/i.test(raw) || /^(localhost|127\.0\.0\.1)(:\d+)?(\/\S*)?$/i.test(raw)
+      || /^[\w.-]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(raw);
+    let tab = plan.tab;
+    if (plan.mode === "new" || !tab) tab = openNewSlot({ url: "about:blank" });
+    if (!tab) return;
+    activate(tab);
+    if (!address) {
+      // Plain text: search for it in Still Search.
+      loadInTab(tab, normalizeInput(raw));
+      return;
+    }
+    const activeEntry = tab.linkedBrowser.browsingContext?.activeSessionHistoryEntry;
+    if (activeEntry) activeEntry.hasUserInteraction = true;
+    tab.linkedBrowser.fixupAndLoadURIString(raw, {
+      triggeringPrincipal: Services.droppedLinkHandler.getTriggeringPrincipal(event),
+      policyContainer: Services.droppedLinkHandler.getPolicyContainer(event),
+      loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP
+    });
+    gBrowser.selectedBrowser.focus();
+  }
+
+  // An agent tab joins the slots at the place it was dropped. With all five
+  // in use it replaces the slot under it, which Undo brings back.
+  function placeAgentTab(tab, plan) {
+    if (!tab || tab.closing || !tab.hidden) { clearDropPreview(); return; }
+    const visual = visualLefts();
+    tab.stillAgent = false;
+    try { SessionStore.deleteCustomTabValue(tab, AGENT_KEY); } catch {}
+    if (plan.mode === "replace" && plan.tab) {
+      const replaced = plan.tab;
+      const at = slotIndex(replaced);
+      const title = slotTitle(replaced);
+      gBrowser.showTab(tab);
+      gBrowser.moveTabTo(tab, { tabIndex: tabPos(replaced), forceUngrouped: true });
+      gBrowser.selectedTab = tab;
+      gBrowser.removeTab(replaced, { animate: false });
+      clearDropPreview();
+      showToast(`${title} closed to make room`, 6000, { label: "Undo", run: () => undoAgentReplace(tab, at) });
+      return;
+    }
+    const tabs = slotTabs();
+    gBrowser.showTab(tab);
+    const before = tabs[plan.index];
+    if (before) {
+      gBrowser.moveTabTo(tab, { tabIndex: tabPos(tab) < tabPos(before) ? tabPos(before) - 1 : tabPos(before), forceUngrouped: true });
+    } else if (tabs.length) {
+      const last = tabs[tabs.length - 1];
+      gBrowser.moveTabTo(tab, { tabIndex: tabPos(tab) < tabPos(last) ? tabPos(last) : tabPos(last) + 1, forceUngrouped: true });
+    }
+    dropPreview = null;
+    dropGhost.classList.remove("visible");
+    for (const node of slotRow.querySelectorAll(".drop-consumed")) node.classList.remove("drop-consumed");
+    gBrowser.selectedTab = tab;
+    renderSlots();
+    rebaseMotion(visual);
+    // It lands where its placeholder was, growing from the placeholder's size.
+    const pill = pills.get(tab);
+    if (pill && animationsAllowed()) {
+      pill.animate([{ opacity: 0.55, scale: ".94" }, { opacity: 1, scale: "1" }], { duration: 280, easing: "cubic-bezier(.23, 1, .32, 1)", composite: "add" });
+    }
+    kickMotion();
+    if (!agentPanel.hidden) renderAgentPanel();
+  }
+
+  // Undo a replace: the agent tab goes back to the agent, and the closed
+  // slot reopens in its old place.
+  function undoAgentReplace(tab, index) {
+    if (tab && !tab.closing) {
+      tab.stillAgent = true;
+      try { SessionStore.setCustomTabValue(tab, AGENT_KEY, "1"); } catch {}
+      gBrowser.hideTab(tab);
+    }
+    state.bypassLimit = true;
+    let restored;
+    try { restored = SessionStore.undoCloseTab(window, 0); } finally { state.bypassLimit = false; }
+    if (!restored) return;
+    const target = slotTabs()[index];
+    if (target && target !== restored) gBrowser.moveTabTo(restored, { tabIndex: tabPos(target), forceUngrouped: true });
+    gBrowser.selectedTab = restored;
+    if (!agentPanel.hidden) renderAgentPanel();
+  }
+
+  // Move a slot without dragging (Ctrl+Shift+Left/Right): the slots glide
+  // to their new places on the same springs as a drag.
   function moveSlot(tab, targetIndex) {
     const tabs = slotTabs();
     const target = tabs[Math.max(0, Math.min(tabs.length - 1, targetIndex))];
-    if (!target || target === tab) return;
-    const before = new Map([...slotRow.children].map((node) => [node, node.getBoundingClientRect()]));
+    if (!target || target === tab || reorder?.active) return;
+    const visual = visualLefts();
     gBrowser.moveTabTo(tab, { tabIndex: tabPos(target), forceUngrouped: true });
+    aura.index = slotTabs().indexOf(gBrowser.selectedTab);
     renderSlots();
-    if (!animationsAllowed()) return;
-    for (const node of slotRow.children) {
-      const old = before.get(node);
-      if (!old) continue;
-      const now = node.getBoundingClientRect();
-      const dx = old.left - now.left;
-      if (!dx) continue;
-      node.animate([
-        { translate: `${dx}px 0`, scale: ".965", filter: "brightness(1.18)" },
-        { translate: "0 0", scale: "1", filter: "brightness(1)" }
-      ], { duration: 430, easing: EASE, composite: "add" });
-    }
+    slotRow.classList.add("reordering");
+    rebaseMotion(visual);
+    kickMotion();
+    showChrome();
+    slotLive.textContent = `${slotTitle(tab)} moved to slot ${slotIndex(tab) + 1}`;
   }
 
   // ----------------------------------------------------------- slot editor
@@ -679,7 +1138,6 @@
     state.editingTab = tab;
     showChrome();
     pill.classList.add("editing");
-    pill.draggable = false;
     const { field, sheet } = buildEditor(tab, pill);
     const title = pill.querySelector(".slot-title");
     if (title) title.replaceWith(field);
@@ -715,7 +1173,6 @@
     const pill = pills.get(tab);
     if (pill) {
       pill.classList.remove("editing", "open");
-      pill.draggable = true;
       const field = pill.querySelector(".slot-inline");
       if (field) field.replaceWith(h("span", { class: "slot-title", text: slotTitle(tab) }));
     }
@@ -2184,19 +2641,49 @@
 
   // --------------------------------------------------------------- agents
   // AI agents connect through `still mcp` or `still agent` (StillAgent.sys.mjs).
-  // Tabs they open are hidden agent tabs: outside the five slots, listed in
-  // the agent panel, and moved into a slot when you (or the agent) show one.
-  // The mark in the bar breathes while an agent is connected and turns while
-  // it works; a thin light along the top edge shows it acting on this page.
+  // Tabs they open are hidden agent tabs: outside the five slots, shown as
+  // small icons beside the agent mark, listed in the agent panel, and moved
+  // into a slot when you (or the agent) show one, or when you drag one
+  // into the row.
+  //
+  // What the agent does is visible where it happens:
+  // - On the page in front of you, the agent has its own pointer. It glides
+  //   to the element it is about to use, rings it, says what it is doing
+  //   ("Clicking “Sign in”"), and ripples on a click. Steps without an
+  //   element (reading, opening a page) are narrated in a small line at the
+  //   bottom left. A thin light runs along the top edge meanwhile.
+  // - In a slot behind the current one, that slot is outlined and its icon
+  //   carries a small pulsing light.
+  // - In a hidden agent tab, that tab's icon beside the mark is ringed.
+  // - The panel keeps a live list of recent steps, with where each happened.
 
   const AGENT_KEY = "still-agent";
+  const AGENT_WORKING_MS = 2500;   // a step counts as current this long
+  const AGENT_POINTER_REST_MS = 2600;
+  const AGENT_LOG_MAX = 40;
   state.agentOpening = 0;
-  const agentState = { clients: [], engine: false, activity: null, idleTimer: 0 };
+  const agentState = { clients: [], engine: false, activity: null, idleTimer: 0, log: [], nextStep: 1, pointerTimer: 0, narrateTimer: 0, clockTimer: 0 };
   const agentPanel = h("div", { class: "utility-panel agent-panel", hidden: true, role: "dialog", "aria-label": "Agent access" });
   const agentLive = h("span", { class: "visually-hidden", role: "status", "aria-live": "polite" });
   const agentEdge = h("div", { id: "still-agent-edge", "aria-hidden": "true" });
+  const agentChips = h("span", { class: "agent-chips", "aria-hidden": "true" });
+  agentButton.append(agentChips);
+  const agentSteps = h("ol", { class: "agent-steps", "aria-label": "Recent agent steps" });
+  const starPath = "M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z";
+
+  // The agent's pointer: an arrow in the agent's light, distinct from yours,
+  // with the step it is taking beside it.
+  const agentPointerVerb = h("span", { class: "agent-pointer-verb" });
+  const agentPointerTarget = h("span", { class: "agent-pointer-target" });
+  const agentPointer = h("div", { id: "still-agent-pointer", "aria-hidden": "true" },
+    icon([["path", { class: "agent-pointer-arrow", d: "M4.6 3.4 19.2 11l-6.5 1.7-3.1 6.2Z" }]], "agent-pointer-icon"),
+    h("span", { class: "agent-pointer-label" }, agentPointerVerb, agentPointerTarget));
+  const agentFocus = h("div", { id: "still-agent-focus", "aria-hidden": "true" });
+  const agentNarrationText = h("span", { class: "agent-narration-text" });
+  const agentNarration = h("div", { id: "still-agent-narration", "aria-hidden": "true" },
+    icon([["path", { class: "agent-star", d: starPath }]], "agent-narration-star"), agentNarrationText);
   chrome.append(agentPanel);
-  layer.append(agentEdge, agentLive);
+  layer.append(agentFocus, agentPointer, agentNarration, agentEdge, agentLive);
 
   function agentNames() {
     const names = [...new Set(agentState.clients)];
@@ -2207,12 +2694,28 @@
     return gBrowser.tabs.filter((tab) => tab.stillAgent && tab.hidden && !tab.closing);
   }
 
+  function tabByBrowserId(id) {
+    return gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browserId === id) || null;
+  }
+
+  // The person can see this tab's page right now.
+  function agentOnScreen(tab) {
+    return Boolean(tab && tab.ownerDocument === document && tab === gBrowser.selectedTab && !tab.hidden
+      && !document.hidden && window.windowState !== window.STATE_MINIMIZED);
+  }
+
+  function agentWorkingTab() {
+    const activity = agentState.activity;
+    return activity && Date.now() - activity.at < AGENT_WORKING_MS ? tabByBrowserId(activity.tab) : null;
+  }
+
   function adoptAgentTab(tab) {
     tab.stillAgent = true;
     try { SessionStore.setCustomTabValue(tab, AGENT_KEY, "1"); } catch {}
     // Hidden once Firefox has finished adding it.
     Promise.resolve().then(() => {
       if (!tab.closing && !tab.selected) gBrowser.hideTab(tab);
+      renderAgentChips();
       if (!agentPanel.hidden) renderAgentPanel();
     });
   }
@@ -2239,6 +2742,7 @@
     tab.stillAgent = false;
     try { SessionStore.deleteCustomTabValue(tab, AGENT_KEY); } catch {}
     gBrowser.showTab(tab);
+    renderAgentChips();
     const tabs = slotTabs();
     if (tabs.length <= SLOT_COUNT) { activate(tab); return; }
     const home = tabs.find((candidate) => candidate !== tab && isHomeTab(candidate));
@@ -2251,45 +2755,179 @@
     showOverflow(tab);
   }
 
+  // "Clicking", "Sign in" -> Clicking “Sign in”
+  function stepText(step) {
+    return step.target ? `${step.label} “${step.target}”` : step.label;
+  }
+
+  // Where a step happened, for the panel.
+  function stepPlace(step) {
+    const tab = tabByBrowserId(step.tab);
+    if (!tab) return step.title ? `Closed tab · ${step.title}` : "Closed tab";
+    const title = slotTitle(tab);
+    if (tab.hidden && tab.stillAgent) return `Agent tab · ${title}`;
+    const index = slotIndex(tab);
+    return index >= 0 ? `Slot ${index + 1} · ${title}` : title;
+  }
+
   function agentStatusText() {
     const activity = agentState.activity;
-    if (activity && Date.now() - activity.at < 2500) {
-      const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browserId === activity.tab);
-      return tab ? `${activity.label} in ${slotTitle(tab)}` : activity.label;
+    if (activity && Date.now() - activity.at < AGENT_WORKING_MS) {
+      const tab = tabByBrowserId(activity.tab);
+      return tab ? `${stepText(activity)} in ${slotTitle(tab)}` : stepText(activity);
     }
-    return "Ready for the next step";
+    return "Waiting for its next step";
+  }
+
+  function ago(at) {
+    const seconds = Math.round((Date.now() - at) / 1000);
+    if (seconds < 5) return "now";
+    if (seconds < 60) return `${seconds} s`;
+    const minutes = Math.round(seconds / 60);
+    return minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
+  }
+
+  // Repeats of the same step on the same page (reading it again, typing
+  // into the same field) update one entry instead of adding more.
+  function logStep(activity) {
+    const last = agentState.log[0];
+    const tab = tabByBrowserId(activity.tab);
+    if (last && last.tab === activity.tab && last.label === activity.label && last.target === activity.target
+        && activity.at - last.at < 6000) {
+      last.at = activity.at;
+      last.repeat = (last.repeat || 1) + 1;
+      return last;
+    }
+    const step = { id: agentState.nextStep++, tab: activity.tab, label: activity.label, target: activity.target || "",
+      title: tab ? slotTitle(tab) : "", at: activity.at };
+    agentState.log.unshift(step);
+    agentState.log.length = Math.min(agentState.log.length, AGENT_LOG_MAX);
+    return step;
+  }
+
+  const stepNodes = new Map();   // step id -> row
+  function stepRow(step) {
+    const tab = tabByBrowserId(step.tab);
+    const glyph = tab ? faviconFor(tab, "slot-favicon agent-step-favicon")
+      : h("span", { class: "slot-favicon agent-step-favicon placeholder" }, icon([["path", { class: "agent-star", d: starPath }]]));
+    const row = h("li", { class: "agent-step" },
+      glyph,
+      h("span", { class: "agent-step-copy" },
+        h("span", { class: "agent-step-text" }),
+        h("small", { class: "agent-step-place" })),
+      h("time", { class: "agent-step-time" }));
+    row.stillStep = step;
+    return row;
+  }
+
+  function updateStepRow(row) {
+    const step = row.stillStep;
+    const text = stepText(step);
+    const textNode = row.querySelector(".agent-step-text");
+    if (textNode.textContent !== text) textNode.textContent = text;
+    const place = stepPlace(step);
+    const placeNode = row.querySelector(".agent-step-place");
+    if (placeNode.textContent !== place) placeNode.textContent = place;
+    const time = ago(step.at);
+    const timeNode = row.querySelector(".agent-step-time");
+    if (timeNode.textContent !== time) timeNode.textContent = time;
+    row.classList.toggle("current", step === agentState.log[0] && Date.now() - step.at < AGENT_WORKING_MS);
+  }
+
+  // Rows are kept by identity: new steps slide in at the top, and the rows
+  // already there move down instead of being rebuilt.
+  function renderSteps({ animate = true } = {}) {
+    const steps = agentState.log;
+    const keep = new Set(steps.map((step) => step.id));
+    for (const [id, row] of stepNodes) if (!keep.has(id)) { row.remove(); stepNodes.delete(id); }
+    const before = animate && animationsAllowed() ? new Map([...stepNodes.values()].map((row) => [row, row.offsetTop])) : null;
+    const fresh = [];
+    steps.forEach((step, index) => {
+      let row = stepNodes.get(step.id);
+      if (!row) { row = stepRow(step); stepNodes.set(step.id, row); fresh.push(row); }
+      if (agentSteps.children[index] !== row) agentSteps.insertBefore(row, agentSteps.children[index] || null);
+      updateStepRow(row);
+    });
+    if (!before) return;
+    for (const row of fresh) {
+      row.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
+        { duration: 200, easing: "cubic-bezier(0, 0, .58, 1)" });
+    }
+    for (const [row, top] of before) {
+      const dy = top - row.offsetTop;
+      if (dy) row.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 240, easing: "cubic-bezier(.77, 0, .175, 1)" });
+    }
+  }
+
+  function agentTabRow(tab) {
+    const working = tab === agentWorkingTab();
+    const row = h("div", { class: `agent-tab-row${working ? " working" : ""}`, draggable: "true",
+      title: "Drag into the slots, or click to show it in a slot" });
+    const open = h("div", { role: "button", tabindex: "0", class: "agent-tab-open" },
+      h("span", { class: "agent-tab-icon" }, faviconFor(tab, "slot-favicon agent-tab-favicon")),
+      h("span", { class: "agent-tab-copy" },
+        h("strong", { text: slotTitle(tab) }),
+        h("small", { text: displayUrl(tabUrl(tab)) || "New tab" })));
+    const show = () => { hideAgentPanel(); showAgentTab(tab); };
+    open.addEventListener("click", show);
+    open.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); show(); }
+    });
+    const close = h("button", { type: "button", class: "agent-tab-close", title: "Close", "aria-label": `Close ${slotTitle(tab)}` }, closeGlyph());
+    close.addEventListener("click", () => { gBrowser.removeTab(tab, { animate: false }); renderAgentPanel(); renderAgentChips(); });
+    row.addEventListener("dragstart", (event) => {
+      if (event.target.closest(".agent-tab-close")) { event.preventDefault(); return; }
+      event.dataTransfer.setData(AGENT_TAB_TYPE, String(tab.linkedBrowser.browserId));
+      event.dataTransfer.effectAllowed = "move";
+      state.draggingAgentTab = tab;
+      row.classList.add("dragging");
+      showChrome();
+    });
+    row.addEventListener("dragend", () => {
+      state.draggingAgentTab = null;
+      row.classList.remove("dragging");
+      clearDropPreview();
+      if (!agentPanel.hidden) renderAgentPanel();
+    });
+    row.append(open, close);
+    return row;
   }
 
   function renderAgentPanel() {
     const names = agentNames();
     const many = new Set(agentState.clients).size > 1;
-    const rows = agentTabs().map((tab) => {
-      const row = h("div", { class: "agent-tab-row" });
-      const open = h("button", { type: "button", class: "agent-tab-open", title: "Show in a slot" },
-        faviconFor(tab, "slot-favicon agent-tab-favicon"),
-        h("span", { class: "agent-tab-copy" },
-          h("strong", { text: slotTitle(tab) }),
-          h("small", { text: displayUrl(tabUrl(tab)) || "New tab" })));
-      open.addEventListener("click", () => { hideAgentPanel(); showAgentTab(tab); });
-      const close = h("button", { type: "button", class: "agent-tab-close", title: "Close", "aria-label": `Close ${slotTitle(tab)}` }, closeGlyph());
-      close.addEventListener("click", () => { gBrowser.removeTab(tab, { animate: false }); renderAgentPanel(); });
-      row.append(open, close);
-      return row;
-    });
+    const tabs = agentTabs();
+    const working = Boolean(agentWorkingTab());
     const stop = h("button", { type: "button", class: "agent-stop", text: "Stop agent access" });
     stop.addEventListener("click", () => {
       hideAgentPanel();
       lazy.StillAgent.disconnectAll().catch(console.error);
       showToast("Agent access stopped. Agents can connect again when you start one.");
     });
+    renderSteps({ animate: false });
     agentPanel.replaceChildren(
-      h("div", { class: "agent-panel-head" },
+      h("div", { class: `agent-panel-head${working ? " working" : ""}` },
         h("strong", { text: `${names} ${many ? "are" : "is"} using Still` }),
-        h("small", { class: "agent-panel-status", text: agentStatusText() })),
-      h("div", { class: "utility-panel-heading", text: rows.length ? "Agent tabs" : "No agent tabs" }),
-      rows.length ? h("div", { class: "agent-tab-list" }, ...rows)
+        h("small", { class: "agent-panel-status" },
+          h("span", { class: "agent-status-light", "aria-hidden": "true" }),
+          h("span", { class: "agent-status-text", text: agentStatusText() }))),
+      h("div", { class: "utility-panel-heading", text: tabs.length ? "Agent tabs" : "No agent tabs" }),
+      tabs.length ? h("div", { class: "agent-tab-list" }, ...tabs.map(agentTabRow))
         : h("p", { class: "agent-panel-note", text: "Pages the agent opens wait here, outside your five slots. It can also work in your slots when you ask." }),
+      agentState.log.length ? h("div", { class: "utility-panel-heading", text: "Steps" }) : null,
+      agentState.log.length ? agentSteps : null,
       stop);
+  }
+
+  // Only what changed while the panel is open: status, current tab, steps.
+  function refreshAgentPanel() {
+    if (agentPanel.hidden) return;
+    const working = agentWorkingTab();
+    agentPanel.querySelector(".agent-panel-head")?.classList.toggle("working", Boolean(working));
+    const status = agentPanel.querySelector(".agent-status-text");
+    if (status) status.textContent = agentStatusText();
+    if (!agentSteps.isConnected && agentState.log.length) { renderAgentPanel(); return; }
+    renderSteps();
   }
 
   function showAgentPanel({ keyboard = false } = {}) {
@@ -2298,12 +2936,19 @@
     agentPanel.hidden = false;
     agentButton.setAttribute("aria-expanded", "true");
     agentButton.classList.add("panel-open");
-    if (keyboard) agentPanel.querySelector("button")?.focus({ preventScroll: true });
+    clearInterval(agentState.clockTimer);
+    agentState.clockTimer = setInterval(() => {
+      for (const row of stepNodes.values()) updateStepRow(row);
+      const status = agentPanel.querySelector(".agent-status-text");
+      if (status) status.textContent = agentStatusText();
+    }, 5000);
+    if (keyboard) agentPanel.querySelector("button, [role=button]")?.focus({ preventScroll: true });
   }
 
   function hideAgentPanel() {
     if (agentPanel.hidden) return;
     agentPanel.hidden = true;
+    clearInterval(agentState.clockTimer);
     agentButton.setAttribute("aria-expanded", "false");
     agentButton.classList.remove("panel-open");
   }
@@ -2315,6 +2960,37 @@
   agentPanel.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { event.preventDefault(); hideAgentPanel(); agentButton.focus(); }
   });
+
+  // The agent's tabs as small icons beside its mark; the one it is working
+  // in carries a ring. Up to three, then a count.
+  function renderAgentChips() {
+    const tabs = agentTabs();
+    const working = agentWorkingTab();
+    const shown = tabs.slice(-3);
+    const key = shown.map((tab) => `${tab.linkedBrowser.browserId}:${tab.getAttribute("image") || ""}:${slotTitle(tab).charAt(0)}`).join("|") + `+${tabs.length}`;
+    if (agentChips.dataset.key !== key) {
+      const old = new Map([...agentChips.children].map((node) => [node.dataset.id, node]));
+      const nodes = shown.map((tab) => {
+        const id = String(tab.linkedBrowser.browserId);
+        const existing = old.get(id);
+        if (existing && existing.dataset.image === (tab.getAttribute("image") || "")) return existing;
+        const chip = h("span", { class: "agent-chip" }, faviconFor(tab, "slot-favicon agent-chip-favicon"));
+        chip.dataset.id = id;
+        chip.dataset.image = tab.getAttribute("image") || "";
+        if (animationsAllowed() && !agentButton.hidden) {
+          chip.animate([{ opacity: 0, scale: ".5" }, { opacity: 1, scale: "1" }], { duration: 260, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
+        }
+        return chip;
+      });
+      if (tabs.length > shown.length) nodes.unshift(h("span", { class: "agent-chip-more", text: `+${tabs.length - shown.length}` }));
+      agentChips.replaceChildren(...nodes);
+      agentChips.dataset.key = key;
+      agentButton.classList.toggle("has-tabs", tabs.length > 0);
+    }
+    for (const chip of agentChips.querySelectorAll(".agent-chip")) {
+      chip.classList.toggle("working", Boolean(working) && chip.dataset.id === String(working.linkedBrowser.browserId));
+    }
+  }
 
   // While the agent works the mark turns; when it stops, the turn eases on
   // to the next resting angle instead of snapping back.
@@ -2338,6 +3014,127 @@
       { duration: Math.max(180, (rest - angle) / 360 * TURN_MS * 1.8), easing: "cubic-bezier(.23, 1, .32, 1)" });
   }
 
+  // --- the agent's pointer on the page in front of you
+  // Positions come from the page (CSS pixels in its viewport) and are mapped
+  // onto the window through the browser's place and zoom. The pointer glides
+  // on a spring, so a new target retargets it from wherever it is.
+  const POINTER_SPRING = { omega: 21, zeta: 0.9 };
+  const pointer = { shown: false, x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, frame: 0, at: 0 };
+
+  function pageToWindow(tab, box) {
+    const browser = tab.linkedBrowser;
+    const area = browser.getBoundingClientRect();
+    const zoom = browser.fullZoom || 1;
+    return { x: area.left + box.x * zoom, y: area.top + box.y * zoom, width: box.width * zoom, height: box.height * zoom, area };
+  }
+
+  function placePointer() {
+    agentPointer.style.translate = `${pointer.x.toFixed(1)}px ${pointer.y.toFixed(1)}px`;
+  }
+
+  function stepPointer(now) {
+    pointer.frame = 0;
+    const elapsed = Math.min(0.05, Math.max(0, (now - pointer.at) / 1000));
+    pointer.at = now;
+    let left = elapsed;
+    while (left > 0) {
+      const dt = Math.min(left, 1 / 240);
+      left -= dt;
+      [pointer.x, pointer.vx] = springStep(pointer.x, pointer.vx, pointer.tx, POINTER_SPRING, dt);
+      [pointer.y, pointer.vy] = springStep(pointer.y, pointer.vy, pointer.ty, POINTER_SPRING, dt);
+    }
+    const done = Math.abs(pointer.x - pointer.tx) < 0.3 && Math.abs(pointer.y - pointer.ty) < 0.3
+      && Math.abs(pointer.vx) < 6 && Math.abs(pointer.vy) < 6;
+    if (done) { pointer.x = pointer.tx; pointer.y = pointer.ty; pointer.vx = pointer.vy = 0; }
+    placePointer();
+    if (!done) pointer.frame = window.requestAnimationFrame(stepPointer);
+  }
+
+  function aimPointer(tab, activity) {
+    const box = pageToWindow(tab, activity.box);
+    const { area } = box;
+    // Off the visible page (it may have scrolled): only narrate.
+    if (box.x + box.width < area.left || box.x > area.right || box.y + box.height < area.top || box.y > area.bottom) {
+      narrateAgent(activity);
+      return;
+    }
+    hideNarration();
+    const x = box.x + Math.min(box.width / 2, 28);
+    const y = box.y + box.height / 2;
+    pointer.tx = x;
+    pointer.ty = y;
+    if (!pointer.shown || !animationsAllowed()) {
+      // Arrive from a little up and to the left, like a hand reaching in.
+      pointer.x = animationsAllowed() ? x - 46 : x;
+      pointer.y = animationsAllowed() ? y - 34 : y;
+      pointer.vx = pointer.vy = 0;
+      pointer.shown = true;
+      placePointer();
+    }
+    agentPointerVerb.textContent = activity.label;
+    agentPointerTarget.textContent = activity.target ? `“${activity.target}”` : "";
+    agentPointer.classList.toggle("flip", x > area.right - 280);
+    agentPointer.classList.add("visible");
+    agentFocus.style.translate = `${(box.x - 4).toFixed(1)}px ${(box.y - 4).toFixed(1)}px`;
+    agentFocus.style.width = `${Math.round(box.width + 8)}px`;
+    agentFocus.style.height = `${Math.round(box.height + 8)}px`;
+    agentFocus.classList.add("visible");
+    if (animationsAllowed()) {
+      if (!pointer.frame) { pointer.at = performance.now(); pointer.frame = window.requestAnimationFrame(stepPointer); }
+    } else {
+      pointer.x = x; pointer.y = y;
+      placePointer();
+    }
+    if (/click/i.test(activity.label)) agentRipple(x, y, /double/i.test(activity.label) ? 2 : 1);
+    clearTimeout(agentState.pointerTimer);
+    agentState.pointerTimer = setTimeout(hideAgentPointer, AGENT_POINTER_REST_MS);
+  }
+
+  // A click lands as a ring spreading from the pointer's tip, timed to the
+  // moment the agent clicks (it waits for the pointer to arrive).
+  function agentRipple(x, y, count) {
+    for (let i = 0; i < count; i++) {
+      const ring = h("div", { class: "agent-ripple", "aria-hidden": "true" });
+      ring.style.left = `${x}px`;
+      ring.style.top = `${y}px`;
+      layer.append(ring);
+      const frames = animationsAllowed()
+        ? [{ opacity: 0.75, transform: "translate(-50%, -50%) scale(.25)" }, { opacity: 0, transform: "translate(-50%, -50%) scale(1.5)" }]
+        : [{ opacity: 0.6 }, { opacity: 0 }];
+      ring.animate(frames, { duration: 520, delay: 200 + i * 140, easing: "cubic-bezier(0, 0, .58, 1)", fill: "both" })
+        .finished.then(() => ring.remove(), () => ring.remove());
+    }
+  }
+
+  function hideAgentPointer() {
+    clearTimeout(agentState.pointerTimer);
+    agentPointer.classList.remove("visible");
+    agentFocus.classList.remove("visible");
+    pointer.shown = false;
+    window.cancelAnimationFrame(pointer.frame);
+    pointer.frame = 0;
+  }
+
+  // Steps that have no element of their own are told in a line at the
+  // bottom left, where browsers show status.
+  function narrateAgent(activity) {
+    agentNarrationText.textContent = `${agentNames()} · ${stepText(activity)}`;
+    agentNarration.classList.add("visible");
+    clearTimeout(agentState.narrateTimer);
+    agentState.narrateTimer = setTimeout(hideNarration, AGENT_POINTER_REST_MS);
+  }
+
+  function hideNarration() {
+    clearTimeout(agentState.narrateTimer);
+    agentNarration.classList.remove("visible");
+  }
+
+  function hideAgentOverlays() {
+    hideAgentPointer();
+    hideNarration();
+    layer.classList.remove("agent-acting");
+  }
+
   function updateAgent({ clients = [], engine = false, activity } = {}) {
     const before = new Set(agentState.clients);
     agentState.clients = clients;
@@ -2355,15 +3152,19 @@
     if (!connected) {
       hideAgentPanel();
       settleAgentTurn();
-      layer.classList.remove("agent-acting");
+      hideAgentOverlays();
       if (before.size) agentLive.textContent = "Agent disconnected";
     }
-    if (activity) {
+    if (activity?.label) {
       agentState.activity = { ...activity, at: Date.now() };
+      logStep(agentState.activity);
       startAgentTurn();
-      const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser?.browserId === activity.tab);
-      const onScreen = tab && tab === gBrowser.selectedTab && !tab.hidden;
-      layer.classList.toggle("agent-acting", Boolean(onScreen));
+      const tab = tabByBrowserId(activity.tab);
+      const onScreen = agentOnScreen(tab);
+      layer.classList.toggle("agent-acting", onScreen);
+      if (onScreen && activity.box) aimPointer(tab, activity);
+      else if (onScreen) narrateAgent(activity);
+      for (const element of slotRow.querySelectorAll(".agent-busy")) element.classList.remove("agent-busy");
       const pill = tab && !onScreen && !tab.hidden ? pills.get(tab) : null;
       pill?.classList.add("agent-busy");
       clearTimeout(agentState.idleTimer);
@@ -2371,11 +3172,20 @@
         settleAgentTurn();
         layer.classList.remove("agent-acting");
         for (const element of slotRow.querySelectorAll(".agent-busy")) element.classList.remove("agent-busy");
-        if (!agentPanel.hidden) agentPanel.querySelector(".agent-panel-status").textContent = agentStatusText();
+        renderAgentChips();
+        refreshAgentPanel();
       }, 1400);
     }
-    if (!agentPanel.hidden) renderAgentPanel();
+    renderAgentChips();
+    if (activity?.label) refreshAgentPanel();
+    else if (!agentPanel.hidden) renderAgentPanel();
   }
+
+  // Your switching away takes the agent's pointer off the page it was on.
+  gBrowser.tabContainer.addEventListener("TabSelect", hideAgentOverlays);
+  gBrowser.tabContainer.addEventListener("TabClose", (event) => {
+    if (event.target.stillAgent) Promise.resolve().then(renderAgentChips);
+  });
 
   // Agent tabs come back hidden after a restart.
   function restoreAgentTabs() {
@@ -2386,6 +3196,7 @@
       tab.stillAgent = true;
       if (!tab.selected) gBrowser.hideTab(tab);
     }
+    renderAgentChips();
   }
 
   // ------------------------------------------------------ download pages
@@ -2775,6 +3586,7 @@
   });
   gBrowser.tabContainer.addEventListener("TabClose", (event) => {
     const tab = event.target;
+    if (reorder?.active) finishReorder({ cancel: true });
     if (state.overflow?.tab === tab) { state.overflow = null; hideOverflowDialog(); }
     removeDownloadPage(tab);
     if (state.editingTab === tab) state.editingTab = null;
@@ -2836,6 +3648,7 @@
       return;
     }
     if (event.key !== "Escape") return;
+    if (reorder?.active) { event.preventDefault(); event.stopPropagation(); finishReorder({ cancel: true }); return; }
     if (state.overflow) { event.preventDefault(); cancelOverflow(); return; }
     if (state.dock.visible) { hideDock(true); return; }
     if (!utilityPanel.hidden) { hideUtilityPanel(); return; }
@@ -2909,7 +3722,7 @@
     replaySplash: () => runSplash({ force: true }),
     runImport,
     slotIndex,
-    agent: { update: updateAgent, openTab: openAgentTab, showTab: showAgentTab, tabs: agentTabs }
+    agent: { update: updateAgent, openTab: openAgentTab, showTab: showAgentTab, tabs: agentTabs, onScreen: agentOnScreen }
   };
 
   renderSlots();
