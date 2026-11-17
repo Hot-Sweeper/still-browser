@@ -490,10 +490,10 @@
       event.stopPropagation();
       closeSlot(pill.stillTab);
     });
-    // The surface carries the slot's fill, edge, wobble and lean; the icon
-    // and title sit above it unscaled.
+    // The surface carries the slot's fill and edge (and lifts when dragged);
+    // the soul's light is drawn above it; the icon and title sit on top.
     pill.stillSurface = h("span", { class: "slot-surface", "aria-hidden": "true" });
-    pill.append(pill.stillSurface, icon, title, close, h("span", { class: "slot-drop-hint", "aria-hidden": "true" }));
+    pill.append(pill.stillSurface, h("span", { class: "slot-light", "aria-hidden": "true" }), icon, title, close, h("span", { class: "slot-drop-hint", "aria-hidden": "true" }));
     pill.addEventListener("click", (event) => {
       if (event.target.closest("button, input, form")) return;
       activate(pill.stillTab);
@@ -517,10 +517,6 @@
       else if (event.key === " ") { event.preventDefault(); activate(pill.stillTab); }
     });
     pill.addEventListener("mouseenter", () => warmTab(pill.stillTab));
-    pill.addEventListener("pointerenter", () => auraHover(pill, true));
-    pill.addEventListener("pointerleave", () => auraHover(pill, false));
-    pill.addEventListener("pointerdown", (event) => { if (event.button === 0 && !event.target.closest("button")) auraPress(pill); });
-    pill.addEventListener("keydown", (event) => { if (!event.repeat && event.target === pill && (event.key === "Enter" || event.key === " ")) auraPress(pill); });
     attachReorder(pill);
     return pill;
   }
@@ -576,6 +572,7 @@
         let pill = pills.get(tab);
         if (!pill) { pill = buildPill(tab); pills.set(tab, pill); }
         updatePill(pill, tab, index);
+        pill.style.setProperty("--i", String(index));
         nodes.push(pill);
       } else {
         const pill = emptyPill(index);
@@ -609,8 +606,9 @@
   // move the focused slot without dragging.
 
   const REORDER_THRESHOLD = 5;
-  const ROOM_SPRING = { omega: 30, zeta: 0.86 };   // slots making room
-  const DROP_SPRING = { omega: 24, zeta: 0.8 };    // a slot settling after release
+  // Critically damped: slots glide into place and stop, without bouncing.
+  const ROOM_SPRING = { omega: 30, zeta: 1 };      // slots making room
+  const DROP_SPRING = { omega: 24, zeta: 1 };      // a slot settling after release
   const LEAN_SPRING = { omega: 22, zeta: 0.9 };
   const slotMotion = new Map();                    // pill -> spring state
   let reorder = null;
@@ -662,7 +660,7 @@
     if (reorder?.active && now - reorder.lastAt > 40) {
       // The pointer rests: the lean fades as the speed does.
       reorder.velocity *= Math.exp(-elapsed * 10);
-      motionOf(reorder.pill).lean = instant ? 0 : clamp(reorder.velocity / 400, -2, 2);
+      motionOf(reorder.pill).lean = 0;
     }
     for (const [pill, m] of slotMotion) {
       if (instant) {
@@ -705,10 +703,6 @@
     else if (!reorder?.active && !dropPreview) settleMotion();
   }
 
-  // The current slot's light rides along while its slot is moving.
-  function auraFollowMotion() {
-    if (slotMotion.has(pills.get(gBrowser.selectedTab))) aura.index = slotTabs().indexOf(gBrowser.selectedTab);
-  }
 
   function settleMotion() {
     for (const [pill] of slotMotion) {
@@ -718,7 +712,7 @@
     slotMotion.clear();
     slotRow.classList.remove("reordering");
     placeShimmerAnchors();
-    aura.index = slotTabs().indexOf(gBrowser.selectedTab);
+    auraMove(slotTabs().indexOf(gBrowser.selectedTab));
   }
 
   // After the row's order changes, each slot keeps its place on screen and
@@ -801,7 +795,7 @@
     m.x = rubber(r.baseX + event.clientX - r.startX, min, max);
     // Vertical movement is allowed a little, so the slot reads as picked up.
     m.y = rubber((r.baseY + event.clientY - r.startY) * 0.35, -4, 8, 10);
-    m.lean = animationsAllowed() ? clamp(r.velocity / 400, -2, 2) : 0;
+    m.lean = 0;
     const to = clamp(Math.round((r.lefts[r.from] + m.x - r.lefts[0]) / r.step), 0, r.list.length - 1);
     if (to !== r.to) {
       r.to = to;
@@ -845,7 +839,6 @@
     if (to !== r.from && target && target !== r.tab && tabs.includes(r.tab)) {
       const visual = visualLefts();
       gBrowser.moveTabTo(r.tab, { tabIndex: tabPos(target), forceUngrouped: true });
-      aura.index = slotTabs().indexOf(gBrowser.selectedTab);
       renderSlots();
       rebaseMotion(visual);
       slotLive.textContent = `${slotTitle(r.tab)} moved to slot ${slotIndex(r.tab) + 1}`;
@@ -1106,7 +1099,6 @@
     if (!target || target === tab || reorder?.active) return;
     const visual = visualLefts();
     gBrowser.moveTabTo(tab, { tabIndex: tabPos(target), forceUngrouped: true });
-    aura.index = slotTabs().indexOf(gBrowser.selectedTab);
     renderSlots();
     slotRow.classList.add("reordering");
     rebaseMotion(visual);
@@ -1441,15 +1433,7 @@
     return { x: pill.offsetLeft + slotRow.offsetLeft, y: pill.offsetTop + slotRow.offsetTop, width: pill.offsetWidth, height: pill.offsetHeight };
   }
 
-  // The switch shimmer. The current slot keeps a calm lit fill (CSS). When
-  // the selection moves, a band of light sweeps across the slots from the
-  // old one to the new one, over their surfaces and text, like the shimmer
-  // on text while a chat assistant thinks. The band rides the page strip's
-  // spring (same samples, same duration), so it speeds up, carries momentum
-  // through fast Ctrl+wheel spins and arrives with the page.
-  //
-  // Each slot draws the band itself (::after) from two row-level values,
-  // so it follows the slots exactly, even while they slide in.
+  // Each slot's place in the row, which the soul's drawing reads (below).
   function placeShimmerAnchors() {
     for (const pill of slotRow.children) {
       pill.style.setProperty("--pill-x", `${pill.offsetLeft}px`);
@@ -1467,148 +1451,87 @@
     return centers[from] + (centers[to] - centers[from]) * (clamped - from);
   }
 
-  // ------------------------------------------------------------ tab wobble
-  // Ported from Still's native build ("bubbly tabs"): the slot you switch to
-  // gets a soft, area-keeping squish, and slots also squish on hover and
-  // press. Only each slot's surface (.slot-surface) wobbles; its icon and
-  // title never scale, so text stays sharp. (The build's travelling light
-  // behind the tabs is gone: it read as a smudge behind the current title.)
-  const AURA_DURATION = 560;
-  const aura = { index: -1, pillAnimation: null, pill: null, hovers: new Map(), presses: new Map() };
+  // ------------------------------------------------------------ the soul
+  // The current slot is lit: a brighter fill, a brighter outline (dark
+  // themes), its title at full strength and its close button showing. That
+  // light, the soul, has a position in slot units (--soul-p on the row).
+  // Each slot is lit by how close the soul is to it, as a whole (never cut
+  // in half), with a soft S-curve. Switching moves the soul on the page
+  // strip's own spring, so the light hands over from slot to slot in step
+  // with the sliding pages; a jump across several slots briefly lights the
+  // ones in between, and a fast Ctrl+wheel spin carries it with momentum.
+  // At rest it is simply the current slot: nothing has to fade out.
+
+  const soul = { index: -1, animation: null };
+  const aura = soul;           // older code reads aura.index for the selected slot
   const auraReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   function surfaceOf(pill) {
     return pill.stillSurface || pill;
   }
 
-  function auraMove(index, instant = false, layout = false) {
-    const button = slotTabs().map((tab) => pills.get(tab))[index];
-    if (!button?.isConnected || (index === aura.index && !layout)) return;
-    const old = aura.index;
-    auraReleasePill();
-    aura.index = index;
-    if (instant || old < 0 || old === index || auraReduced.matches || !animationsAllowed()) return;
-    auraBounce(button);
+  function soulStop() {
+    soul.animation?.cancel();
+    soul.animation = null;
   }
 
-  // Area-preserving squish: wider and shorter, then back, with a tiny hop.
-  // Tab motion lives on the separate scale/translate properties, never on
-  // `transform`: that one belongs to the bar's slide-in transition, and
-  // stacking animations on it left tabs painted half-slid off the top.
-  // Both squishes are additive, so a press and a hover multiply together.
-  function auraImpulse(pill) {
-    const frames = [];
-    for (let step = 0; step <= 60; step++) {
-      const t = step / 60;
-      const deformation = step === 60 ? 0 : -0.05 * Math.exp(-4.6 * t) * Math.sin(11 * t);
-      const x = 1 + deformation;
-      frames.push({ offset: t, scale: `${x} ${1 / x}`, translate: `0 ${-deformation * 28}px` });
-    }
-    return surfaceOf(pill).animate(frames, { duration: AURA_DURATION, easing: "linear", fill: "both", composite: "add" });
+  // Rest the soul on slot `index` at once.
+  function auraMove(index) {
+    if (index < 0) return;
+    soulStop();
+    soul.index = index;
+    slotRow.style.setProperty("--soul-p", String(index));
   }
 
-  function auraBounce(pill) {
-    aura.pill = pill;
-    const animation = auraImpulse(pill);
-    aura.pillAnimation = animation;
-    animation.onfinish = () => { if (aura.pillAnimation === animation) auraReleasePill(); };
-  }
-
-  function auraReleasePill() {
-    aura.pillAnimation?.cancel();
-    aura.pillAnimation = null;
-    aura.pill = null;
-  }
-
-  function auraPress(pill) {
-    aura.presses.get(pill)?.cancel();
-    aura.presses.delete(pill);
-    if (auraReduced.matches || !animationsAllowed()) return;
-    const animation = auraImpulse(pill);
-    aura.presses.set(pill, animation);
+  // Follow the strip's spring samples (slot units over `duration` s). The
+  // samples start where the strip is now, so a retarget never jumps.
+  function soulGlide(samples, duration) {
+    const target = Math.round(samples[samples.length - 1]);
+    if (!animationsAllowed() || duration <= 0) { auraMove(target); return; }
+    soulStop();
+    soul.index = target;
+    const last = samples.length - 1;
+    const frames = samples.map((value, k) => ({ "--soul-p": value.toFixed(4), offset: k / last }));
+    const animation = slotRow.animate(frames, { duration: duration * 1000, easing: "linear", fill: "forwards" });
+    soul.animation = animation;
     animation.onfinish = () => {
-      if (aura.presses.get(pill) !== animation) return;
-      animation.cancel();
-      aura.presses.delete(pill);
+      if (soul.animation !== animation) return;
+      slotRow.style.setProperty("--soul-p", samples[last].toFixed(4));
+      soulStop();
     };
   }
 
-  // Hover: the tab grows a little (more in height) on a soft spring with a
-  // squash; leaving springs it back.
-  function auraHover(pill, entered) {
-    const previous = aura.hovers.get(pill);
-    if (previous?.entered === entered) return;
-    let cx = 1, cy = 1;
-    if (previous?.animation) {
-      const timing = previous.animation.effect.getComputedTiming();
-      const frame = previous.frames[Math.round((timing.progress ?? 1) * 60)] || previous.frames[60];
-      cx = frame.sx; cy = frame.sy;
-      previous.animation.cancel();
-    } else if (previous?.entered) { cx = 1.018; cy = 1.075; }
-    const x = entered ? 1.018 : 1, y = entered ? 1.075 : 1;
-    const state = { entered, animation: null, frames: [] };
-    aura.hovers.set(pill, state);
-    if (auraReduced.matches || !animationsAllowed()) {
-      if (entered) {
-        state.frames = [{ sx: x, sy: y }];
-        state.animation = surfaceOf(pill).animate([{ scale: `${x} ${y}` }], { duration: 0, fill: "forwards", composite: "add" });
-        state.animation.persist();
-      } else aura.hovers.delete(pill);
-      return;
-    }
-    for (let step = 0; step <= 60; step++) {
-      const t = step / 60;
-      const progress = step === 60 ? 1 : 1 - Math.exp(-6 * t) * (Math.cos(10 * t) + 0.6 * Math.sin(10 * t));
-      const squash = step === 60 ? 0 : (entered ? -0.038 : 0.025) * Math.exp(-5 * t) * Math.sin(12 * t);
-      let sx = (cx + (x - cx) * progress) * (1 + squash);
-      let sy = (cy + (y - cy) * progress) / (1 + squash);
-      // Never shrink an entering tab below rest or grow a leaving one again.
-      if (entered) { sx = Math.max(1, sx); sy = Math.max(1, sy); }
-      else { sx = Math.min(cx, sx); sy = Math.min(cy, sy); }
-      state.frames.push({ sx, sy });
-    }
-    const animation = surfaceOf(pill).animate(state.frames.map(({ sx, sy }, k) => ({ offset: k / 60, scale: `${sx} ${sy}` })),
-      { duration: entered ? 560 : 640, easing: "linear", fill: "forwards", composite: "add" });
-    state.animation = animation;
-    // A press squish on the same property would otherwise let Firefox drop
-    // the finished hover and snap the tab back to rest while still hovered.
-    if (entered) animation.persist();
-    if (!entered) animation.onfinish = () => {
-      if (aura.hovers.get(pill) !== state) return;
-      animation.cancel();
-      aura.hovers.delete(pill);
-    };
+  function glideShimmer(samples, duration) {
+    soulGlide(samples, duration);
+  }
+
+  // Keep the soul on the selected slot when nothing is moving it.
+  function auraSync() {
+    const index = slotTabs().indexOf(gBrowser.selectedTab);
+    if (index < 0 || soul.animation) return;
+    if (index !== soul.index) auraMove(index);
   }
 
   function auraSettle() {
-    auraMove(aura.index, true, true);
-    for (const [pill, state] of aura.hovers) { state.animation?.cancel(); if (!state.entered) aura.hovers.delete(pill); }
-    for (const [, animation] of aura.presses) animation.cancel();
-    aura.presses.clear();
+    if (soul.index >= 0) auraMove(soul.index);
   }
 
-  // Keep the light on the selected tab (instantly when nothing animates).
-  function auraSync() {
+  // A dragged slot keeps its light: the soul follows the selected slot's
+  // place in the row as soon as the order changes.
+  function auraFollowMotion() {
     const index = slotTabs().indexOf(gBrowser.selectedTab);
-    if (index < 0) return;
-    if (aura.index < 0) auraMove(index, true, true);
-    else if (index !== aura.index) auraMove(index);
+    if (index >= 0 && index !== soul.index && !soul.animation) auraMove(index);
   }
-  // Only a real change of the row's width re-places the light (opening the
-  // bar also reports a resize, which must not cut a running move short).
+
+  // A real change of the row's width re-places the slots' anchors.
   let auraRowWidth = 0;
   new ResizeObserver(() => {
     const width = slotRow.offsetWidth;
     if (!width || width === auraRowWidth) return;
     auraRowWidth = width;
-    if (aura.index >= 0) auraMove(aura.index, true, true);
+    placeShimmerAnchors();
   }).observe(slotRow);
   auraReduced.addEventListener("change", auraSettle);
-  window.addEventListener("deactivate", auraSettle);
-
-  function glideShimmer(samples) {
-    auraMove(Math.round(samples[samples.length - 1]));
-  }
 
   // Ctrl+scroll shows the slots from the top while switching, with the
   // light flowing to each new slot, then slides them away again.

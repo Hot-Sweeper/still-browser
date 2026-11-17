@@ -386,8 +386,6 @@
 }
 
 #still-chrome .slot:hover { background: var(--still-pill-hover); }
-#still-chrome .slot.active { background: var(--still-pill); }
-#still-chrome .slot.active:hover { background: var(--still-pill-hover); }
 #still-chrome .slot:focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: 1px; }
 
 #still-chrome .slot.empty {
@@ -465,7 +463,6 @@
 }
 
 #still-chrome .slot-close svg { width: 20px; height: 20px; stroke-width: 1.9; }
-#still-chrome .slot.active .slot-close { opacity: .5; }
 #still-chrome .slot:is(:hover, :focus-within) .slot-close { opacity: .7; }
 #still-chrome .slot-close:is(:hover, :focus-visible) {
   opacity: 1;
@@ -1175,127 +1172,73 @@
 .address-row:is(.search, .action) .address-title { font-weight: 500; }
 .address-row:is(.search, .action) small { flex: 0 0 auto; margin-left: auto; }
 
-/* -------------------------------------------------------- switch shimmer
-   The current slot has a calm lit fill. Switching sends a band of light
-   across the slots from the old slot to the new one (still-window.js:
-   glideShimmer animates the two values below on the slot row; each slot
-   draws its part of the band, so it lines up even while slots slide in). */
+/* -------------------------------------------------------------- the soul
+   The current slot is lit: brighter fill, brighter outline (dark themes),
+   full-strength title, close button showing. Each slot is lit by how near
+   the soul (--soul-p, a slot position animated by still-window.js on the
+   page strip's spring) is to it, as a whole, never cut in half. Switching
+   hands the light from slot to slot in step with the sliding pages. */
 
-@property --still-shimmer-x {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: -9999px;
-}
-
-@property --still-shimmer-alpha {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 0;
-}
-
-@property --still-soul-core {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 0;
-}
-
-@property --still-shimmer-tail {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: 36px;
-}
-
-@property --still-aura-x { syntax: "<length>"; inherits: true; initial-value: 0px; }
-@property --still-aura-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
-@property --still-aura-sx { syntax: "<number>"; inherits: true; initial-value: 1; }
-@property --still-aura-sy { syntax: "<number>"; inherits: true; initial-value: 1; }
-@property --still-aura-o { syntax: "<number>"; inherits: true; initial-value: .82; }
-@property --still-soul-headh { syntax: "<percentage>"; inherits: true; initial-value: 170%; }
-@property --still-soul-env { syntax: "<number>"; inherits: true; initial-value: 0; }
-@property --still-soul-bx { syntax: "<length>"; inherits: true; initial-value: 0px; }
-@property --still-soul-by { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
-@property --still-soul-rx { syntax: "<length>"; inherits: true; initial-value: 60px; }
-@property --still-soul-ry { syntax: "<length>"; inherits: true; initial-value: 30px; }
-@property --still-sheen-x { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
-@property --still-sheen-a { syntax: "<number>"; inherits: true; initial-value: 0; }
-
-@property --still-shimmer-head {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: 96px;
-}
-
-#still-chrome .slot-row {
-  --still-shimmer-width: 280px;
-  --still-shimmer-light: 255, 255, 255;
-  --still-shimmer-strength: .38;
-  --still-shimmer-angle: 90deg;
-  --still-shimmer-trail: 1;
-  /* Titles: the current slot reads at full strength, the others a step
-     back; the band lifts each title to full as it passes. */
-  --still-title-rest: rgba(238, 240, 238, .66);
-  --still-title-lit: 255, 255, 255;
-}
-
-/* Tab aura (ported from Still's native build): one light travels behind
-   the tabs to the selected one (still-window.js: auraMove). */
-#still-chrome .slot { transition-property: transform, opacity, background-color, border-color, box-shadow; }
-#still-chrome .slot.active { --still-glass-tint: var(--still-pill-active); }
-#still-chrome .slot.active:hover { --still-glass-tint: var(--still-pill-active); }
-/* The text shimmer: like a chat assistant's thinking line, the letters
-   brighten as the band crosses them. */
-#still-chrome .slot:not(.empty) .slot-title {
-  color: transparent;
-  background:
-    linear-gradient(90deg,
-      rgba(var(--still-title-lit), 0) 0,
-      rgba(var(--still-title-lit), var(--still-shimmer-alpha)) 70px,
-      rgba(var(--still-title-lit), 0) 140px) no-repeat,
-    linear-gradient(var(--still-title-base), var(--still-title-base));
-  background-size: 140px 100%, 100% 100%;
-  background-position: calc(var(--still-shimmer-x) - var(--title-x, 0px) - 70px) 0, 0 0;
-  -moz-background-clip: text;
-  background-clip: text;
-  /* Text painted from its background has no ellipsis; long titles fade out
-     at the end instead. */
-  text-overflow: clip;
-  mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
-  --still-title-base: var(--still-title-rest);
-  transition: --still-title-base 320ms ease;
-}
-#still-chrome .slot.active .slot-title,
-#still-chrome .slot:hover .slot-title { --still-title-base: var(--still-text); }
-
-@property --still-title-base {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: transparent;
-}
+@property --soul-p { syntax: "<number>"; inherits: true; initial-value: -9; }
+@property --still-title-base { syntax: "<color>"; inherits: true; initial-value: transparent; }
 
 :root[still] {
-  --still-pill-active: rgba(255, 255, 255, 0.99);
-  --still-pill-active-edge: rgba(255, 255, 255, 0.9);
+  /* Slots sit a step below the lit fill. */
+  --still-slot-fill: rgba(234, 235, 231, .95);
+  --still-slot-fill-hover: rgba(243, 243, 240, .97);
+  --still-soul-fill: rgba(255, 255, 255, .96);
+  --still-soul-edge: transparent;
+  --still-title-rest: rgba(37, 38, 37, .6);
+  --still-title-lit: #1f201f;
 }
-
 @media (prefers-color-scheme: dark) {
   :root[still] {
-    --still-pill-active: rgba(44, 47, 45, 0.96);
-    --still-pill-active-edge: rgba(255, 255, 255, 0.16);
+    --still-slot-fill: var(--still-pill);
+    --still-slot-fill-hover: var(--still-pill-hover);
+    --still-soul-fill: rgba(255, 255, 255, .09);
+    --still-soul-edge: rgba(255, 255, 255, .2);
+    --still-title-rest: rgba(238, 240, 238, .62);
+    --still-title-lit: #f1f2f0;
   }
 }
-
-@media (prefers-color-scheme: light) {
-  #still-chrome .slot-row {
-    --still-shimmer-light: 255, 255, 255;
-    --still-shimmer-strength: .85;
-    --still-title-rest: rgba(37, 38, 37, .62);
-    --still-title-lit: 0, 0, 0;
-  }
+:root[still][still-theme="oled"] {
+  --still-soul-fill: rgba(255, 255, 255, .07);
+  --still-soul-edge: rgba(255, 255, 255, .28);
 }
 
-@media (prefers-reduced-motion: reduce) {
+#still-chrome .slot { --still-glass-tint: var(--still-slot-fill); }
+#still-chrome .slot:hover { --still-glass-tint: var(--still-slot-fill-hover); }
 
+/* How lit a slot is: 1 when the soul is on it, 0 from a little under one
+   slot away, along a smooth S-curve, so a hand-off crossfades cleanly. */
+#still-chrome .slot:not(.empty) {
+  --soul-d: clamp(0, 1 - abs(var(--soul-p) - var(--i, -9)) * 1.2, 1);
+  --lit: calc(var(--soul-d) * var(--soul-d) * (3 - 2 * var(--soul-d)));
 }
+
+#still-chrome .slot-light {
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border: 1px solid var(--still-soul-edge);
+  border-radius: 14px;
+  background: var(--still-soul-fill);
+  opacity: var(--lit, 0);
+  pointer-events: none;
+}
+
+#still-chrome .slot:not(.empty) .slot-title {
+  color: color-mix(in srgb, var(--still-title-lit) calc(var(--lit, 0) * 100%), var(--still-title-base));
+  text-overflow: clip;
+  /* Long titles fade out at the end. */
+  mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
+  --still-title-base: var(--still-title-rest);
+  transition: --still-title-base 150ms var(--still-ease-out);
+}
+#still-chrome .slot:hover .slot-title { --still-title-base: var(--still-text); }
+#still-chrome .slot:not(.empty) .slot-close { opacity: calc(var(--lit, 0) * .5); }
+#still-chrome .slot:is(:hover, :focus-within) .slot-close { opacity: .7; }
+#still-chrome .slot .slot-close:is(:hover, :focus-visible) { opacity: 1; }
 
 /* ------------------------------------------------------- download pages
    A slot opened for a file shows the download (still-window.js:
@@ -1961,9 +1904,8 @@
   box-shadow: var(--still-slot-shadow);
   pointer-events: none;
   transition: background-color 150ms var(--still-ease-out), border-color 150ms var(--still-ease-out),
-    box-shadow 220ms var(--still-ease-out-strong), scale 320ms var(--still-ease-spring);
+    box-shadow 220ms var(--still-ease-out-strong), scale 240ms var(--still-ease-out-strong);
 }
-#still-chrome .slot.active .slot-surface { border-color: var(--still-slot-active-edge); }
 #still-chrome .slot:not(.active):hover .slot-surface { border-color: color-mix(in srgb, var(--still-slot-edge), var(--still-slot-active-edge)); }
 /* Empty slots are open places, not slots: no fill of their own, a dashed
    outline and a plus, in light on the bar's dark scrim in every theme (the

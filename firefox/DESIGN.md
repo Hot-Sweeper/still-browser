@@ -12,13 +12,19 @@ the window controls slide in from the top edge when the pointer reaches it.
   slots get one quiet hairline (`--still-slot-edge`, 7.5% / 10% white) and no
   shadow, since the bar's scrim already separates them. No inner highlight
   lines, corner shines or glows.
-- The current slot is the brighter fill (`--still-pill-active`), with a
-  brighter hairline in the dark themes (`--still-slot-active-edge`) and its
-  title at full strength. The light that used to travel behind the slots is
-  gone: it read as a smudge behind the current title.
-- A slot's fill and edge live on `.slot-surface`, the only part that wobbles
-  (hover, press, the landing squish), lifts and leans. Icons and titles never
-  scale, so they stay sharp; a dragged slot moves in device-pixel steps.
+- The current slot is lit (the soul): a brighter fill (`--still-soul-fill`),
+  a brighter hairline in the dark themes (`--still-soul-edge`), its title at
+  full strength (`--still-title-lit`) and its close button showing. Other
+  slots sit a step lower (`--still-slot-fill`, `--still-title-rest`).
+- Switching moves the soul (`--soul-p`, a slot position) on the page strip's
+  own spring, so the light hands over from slot to slot in step with the
+  sliding pages. Each slot is lit as a whole by how near the soul is (an
+  S-curve reaching 0 at 0.83 slots), never cut in half; a jump across slots
+  briefly lights the ones in between. No glow, stretch or shape of its own,
+  and at rest it is simply the current slot, so nothing fades out at the end.
+- No wobble: slots do not squish on hover, press or landing. Hover only
+  brightens the fill, hairline and title. Icons and titles never scale; a
+  dragged slot moves in device-pixel steps.
 - Themes: system, light, dark and OLED. OLED sets the surfaces to pure black.
   Text uses `--still-text` and `--still-muted`.
 - Empty slots are open places, not slots: no fill of their own (5% white),
@@ -53,17 +59,16 @@ the window controls slide in from the top edge when the pointer reaches it.
 
 ## Rearranging slots
 - A slot is picked up after 5 px of movement. Its surface lifts (scale
-  1.035, opaque `--still-slot-lifted` fill, a deeper shadow or a brighter
-  hairline in the dark themes) and leans up to 2° with its speed while the
-  title stays level. It follows the pointer one to one, moves a little
+  1.035 over 240 ms, opaque `--still-slot-lifted` fill, a deeper shadow or a
+  brighter hairline in the dark themes) without leaning. It follows the pointer one to one, moves a little
   vertically under resistance, and rubber-bands past the first or last
   place.
-- The other slots make room on springs (`ROOM_SPRING`, ω 30, ζ .86) as soon
-  as the dragged slot crosses half a slot. Letting go drops it from where it
-  is with its release speed (`DROP_SPRING`, ω 24, ζ .8); the lift settles on
-  `--still-ease-spring`. Springs retarget from their current state, so
-  nothing restarts. Motion uses `translate` and `rotate`, never `transform`
-  (the bar's entrance owns that).
+- The other slots make room on critically damped springs (`ROOM_SPRING`,
+  ω 30, ζ 1) as soon as the dragged slot crosses half a slot. Letting go
+  drops it from where it is with its release speed (`DROP_SPRING`, ω 24,
+  ζ 1). Nothing bounces. Springs retarget from their current state, so
+  nothing restarts. Motion uses `translate`, never `transform` (the bar's
+  entrance owns that).
 - Escape puts the slot back. Ctrl+Shift+Left/Right moves the focused slot
   on the same springs, and a screen reader hears where it went.
 - Drops onto the row: a link, text or file from a page shows "Open here" on

@@ -60,6 +60,24 @@ async function main() {
     await act([{ type: 'pointerUp', button: 0 }]);
     await wait(1200);
     await shot('after');
+
+    // A switch across two slots (as Ctrl+wheel does), frozen at moments of
+    // the glide: the strip and the soul are paused at the same time.
+    await act([{ type: 'pointerMove', x: 5, y: 200, origin: 'viewport' }]);
+    await m.run('gBrowser.selectedTab = StillChrome.slotTabs()[0];');
+    await wait(900);
+    await m.run('document.querySelector("#still-reveal").dispatchEvent(new MouseEvent("mouseenter", { clientX: 300 }));');
+    await wait(700);
+    await m.run('StillChrome.activate(StillChrome.slotTabs()[3], 1);');
+    await m.run('window.__glide = [...document.querySelector("#still-chrome .slot-row").getAnimations(), ...(StillChrome.state.strip?.animations || [])]; window.__glide.forEach((a) => a.pause());');
+    for (const t of [30, 70, 120, 180, 260, 420]) {
+      await m.run('window.__glide.forEach((a) => { a.currentTime = arguments[0]; });', [t]);
+      await wait(120);
+      await shot(`glide-${String(t).padStart(3, '0')}`);
+    }
+    await m.run('window.__glide.forEach((a) => a.finish());');
+    await wait(300);
+    await shot('glide-end');
   } finally {
     await s.stop();
   }
