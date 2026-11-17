@@ -119,8 +119,10 @@ build fails. The runtime copies a new build in on the next start of Still.
 
 Firefox cannot apply `backdrop-filter` to page content (pages render in another
 process), so the slot bar, panels and dock use solid tints instead of blur. The
-current slot is marked by one translucent fill that glides between slots on
-the same spring as the page strip.
+current slot is the brighter fill, and the slot you switch to gives a soft
+squish. Only each slot's surface wobbles; its icon and title never scale.
+`node firefox/tools/capture-slots.js [theme] [scale]` captures close-ups of
+the bar at rest, hovered, pressed and mid-drag.
 
 ### YouTube
 

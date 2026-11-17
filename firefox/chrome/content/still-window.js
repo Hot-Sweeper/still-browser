@@ -224,8 +224,7 @@
   const topControls = h("div", { class: "top-controls" }, agentButton, utilityButton, minimizeButton, maximizeButton, closeButton);
   const utilityPanel = h("div", { class: "utility-panel", hidden: true });
   // The current slot's soft light. It moves to whichever slot is selected.
-  const auraWrap = h("div", { id: "still-tab-aura-wrap", "aria-hidden": "true" }, h("div", { id: "still-tab-aura" }));
-  const chrome = h("div", { id: "still-chrome", role: "banner", "aria-label": "Still controls" }, auraWrap, slotRow, topControls, utilityPanel);
+  const chrome = h("div", { id: "still-chrome", role: "banner", "aria-label": "Still controls" }, slotRow, topControls, utilityPanel);
 
   const toastMessage = h("span");
   const toastAction = h("button", { type: "button", hidden: true });
@@ -490,7 +489,10 @@
       event.stopPropagation();
       closeSlot(pill.stillTab);
     });
-    pill.append(icon, title, close, h("span", { class: "slot-drop-hint", "aria-hidden": "true" }));
+    // The surface carries the slot's fill, edge, wobble and lean; the icon
+    // and title sit above it unscaled.
+    pill.stillSurface = h("span", { class: "slot-surface", "aria-hidden": "true" });
+    pill.append(pill.stillSurface, icon, title, close, h("span", { class: "slot-drop-hint", "aria-hidden": "true" }));
     pill.addEventListener("click", (event) => {
       if (event.target.closest("button, input, form")) return;
       activate(pill.stillTab);
@@ -659,7 +661,7 @@
     if (reorder?.active && now - reorder.lastAt > 40) {
       // The pointer rests: the lean fades as the speed does.
       reorder.velocity *= Math.exp(-elapsed * 10);
-      motionOf(reorder.pill).lean = instant ? 0 : clamp(reorder.velocity / 300, -3, 3);
+      motionOf(reorder.pill).lean = instant ? 0 : clamp(reorder.velocity / 400, -2, 2);
     }
     for (const [pill, m] of slotMotion) {
       if (instant) {
@@ -682,13 +684,16 @@
         && Math.abs(m.y) < 0.3 && Math.abs(m.vy) < 8 && Math.abs(m.rot) < 0.05 && Math.abs(m.vr) < 1;
       if (settled && !m.target) {
         pill.style.removeProperty("translate");
-        pill.style.removeProperty("rotate");
+        surfaceOf(pill).style.removeProperty("rotate");
         slotMotion.delete(pill);
         continue;
       }
       if (settled) { m.x = m.target; m.v = 0; }
-      pill.style.translate = `${m.x.toFixed(2)}px ${m.y.toFixed(2)}px`;
-      pill.style.rotate = `${m.rot.toFixed(3)}deg`;
+      // Device-pixel steps keep the title on the pixel grid, so it stays
+      // sharp while it moves. Only the surface leans; the text stays level.
+      const px = 1 / (window.devicePixelRatio || 1);
+      pill.style.translate = `${Math.round(m.x / px) * px}px ${Math.round(m.y / px) * px}px`;
+      surfaceOf(pill).style.rotate = `${m.rot.toFixed(3)}deg`;
       // The light seen through each slot's glass follows the slot.
       pill.style.setProperty("--pill-x", `${m.left + m.x}px`);
       pill.querySelector(".slot-title")?.style.setProperty("--title-x", `${m.left + m.x + m.titleLeft}px`);
@@ -701,24 +706,18 @@
 
   // The current slot's light rides along while its slot is moving.
   function auraFollowMotion() {
-    const pill = pills.get(gBrowser.selectedTab);
-    const m = pill && slotMotion.get(pill);
-    if (!m) return;
-    aura.animation?.cancel();
-    aura.animation = null;
-    aura.index = slotTabs().indexOf(gBrowser.selectedTab);
-    chrome.style.setProperty("--still-aura-x", `${m.left + m.x}px`);
+    if (slotMotion.has(pills.get(gBrowser.selectedTab))) aura.index = slotTabs().indexOf(gBrowser.selectedTab);
   }
 
   function settleMotion() {
     for (const [pill] of slotMotion) {
       pill.style.removeProperty("translate");
-      pill.style.removeProperty("rotate");
+      surfaceOf(pill).style.removeProperty("rotate");
     }
     slotMotion.clear();
     slotRow.classList.remove("reordering");
     placeShimmerAnchors();
-    if (aura.index >= 0) auraMove(aura.index, true, true);
+    aura.index = slotTabs().indexOf(gBrowser.selectedTab);
   }
 
   // After the row's order changes, each slot keeps its place on screen and
@@ -801,7 +800,7 @@
     m.x = rubber(r.baseX + event.clientX - r.startX, min, max);
     // Vertical movement is allowed a little, so the slot reads as picked up.
     m.y = rubber((r.baseY + event.clientY - r.startY) * 0.35, -4, 8, 10);
-    m.lean = animationsAllowed() ? clamp(r.velocity / 300, -3, 3) : 0;
+    m.lean = animationsAllowed() ? clamp(r.velocity / 400, -2, 2) : 0;
     const to = clamp(Math.round((r.lefts[r.from] + m.x - r.lefts[0]) / r.step), 0, r.list.length - 1);
     if (to !== r.to) {
       r.to = to;
@@ -1070,7 +1069,8 @@
     // It lands where its placeholder was, growing from the placeholder's size.
     const pill = pills.get(tab);
     if (pill && animationsAllowed()) {
-      pill.animate([{ opacity: 0.55, scale: ".94" }, { opacity: 1, scale: "1" }], { duration: 280, easing: "cubic-bezier(.23, 1, .32, 1)", composite: "add" });
+      pill.animate([{ opacity: 0.55 }, { opacity: 1 }], { duration: 200, easing: "cubic-bezier(0, 0, .58, 1)" });
+      surfaceOf(pill).animate([{ scale: ".94" }, { scale: "1" }], { duration: 280, easing: "cubic-bezier(.23, 1, .32, 1)", composite: "add" });
     }
     kickMotion();
     if (!agentPanel.hidden) renderAgentPanel();
@@ -1463,65 +1463,28 @@
     return centers[from] + (centers[to] - centers[from]) * (clamped - from);
   }
 
-  // ------------------------------------------------------------ tab aura
-  // Ported from Still's native build (aura.js, "bubbly tabs"): one light
-  // travels behind the tabs to the selected one, overshooting a little and
-  // swelling on the way, and the tab it lands on gets a soft, area-keeping
-  // squish. Tabs also squish on hover and press. The light's position and
-  // shape live on #still-chrome as --still-aura-* values, read by the layer
-  // behind the row and by each tab (the light seen through its glass).
+  // ------------------------------------------------------------ tab wobble
+  // Ported from Still's native build ("bubbly tabs"): the slot you switch to
+  // gets a soft, area-keeping squish, and slots also squish on hover and
+  // press. Only each slot's surface (.slot-surface) wobbles; its icon and
+  // title never scale, so text stays sharp. (The build's travelling light
+  // behind the tabs is gone: it read as a smudge behind the current title.)
   const AURA_DURATION = 560;
-  const aura = { index: -1, animation: null, pillAnimation: null, pill: null, hovers: new Map(), presses: new Map() };
+  const aura = { index: -1, pillAnimation: null, pill: null, hovers: new Map(), presses: new Map() };
   const auraReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  function auraState() {
-    const style = window.getComputedStyle(chrome);
-    const read = (name, fallback) => {
-      const value = parseFloat(style.getPropertyValue(name));
-      return Number.isFinite(value) ? value : fallback;
-    };
-    return { x: read("--still-aura-x", NaN), sx: read("--still-aura-sx", 1), sy: read("--still-aura-sy", 1) };
-  }
-
-  function auraSet(x, width) {
-    chrome.style.setProperty("--still-aura-x", `${x}px`);
-    chrome.style.setProperty("--still-aura-w", `${width}px`);
-    chrome.style.setProperty("--still-aura-sx", "1");
-    chrome.style.setProperty("--still-aura-sy", "1");
-    chrome.style.setProperty("--still-aura-o", ".82");
+  function surfaceOf(pill) {
+    return pill.stillSurface || pill;
   }
 
   function auraMove(index, instant = false, layout = false) {
-    const list = slotTabs().map((tab) => pills.get(tab));
-    const button = list[index];
+    const button = slotTabs().map((tab) => pills.get(tab))[index];
     if (!button?.isConnected || (index === aura.index && !layout)) return;
-    if (!button.offsetWidth) return;
-    auraWrap.style.left = `${slotRow.offsetLeft}px`;
-    auraWrap.style.top = `${slotRow.offsetTop}px`;
-    auraWrap.style.width = `${slotRow.offsetWidth}px`;
     const old = aura.index;
-    const current = auraState();
-    const from = old < 0 || !Number.isFinite(current.x) ? button.offsetLeft : current.x;
-    aura.animation?.cancel();
-    aura.animation = null;
     auraReleasePill();
     aura.index = index;
-    const x = button.offsetLeft;
-    auraSet(x, button.offsetWidth);
-    if (instant || old < 0 || auraReduced.matches || !animationsAllowed()) return;
-    const overshoot = Math.sign(x - from) * Math.min(8, Math.abs(x - from) * 0.025);
-    const animation = chrome.animate([
-      { "--still-aura-x": `${from}px`, "--still-aura-sx": String(current.sx || 1), "--still-aura-sy": String(current.sy || 1), "--still-aura-o": ".82", easing: "cubic-bezier(.22,.7,.25,1)" },
-      { offset: 0.76, "--still-aura-x": `${x + overshoot}px`, "--still-aura-sx": "1.035", "--still-aura-sy": "1.12", "--still-aura-o": "1", easing: "cubic-bezier(.2,0,.2,1)" },
-      { "--still-aura-x": `${x}px`, "--still-aura-sx": "1", "--still-aura-sy": "1", "--still-aura-o": ".82" }
-    ], { duration: AURA_DURATION, fill: "both" });
-    aura.animation = animation;
+    if (instant || old < 0 || old === index || auraReduced.matches || !animationsAllowed()) return;
     auraBounce(button);
-    animation.onfinish = () => {
-      if (aura.animation !== animation) return;
-      animation.cancel();
-      aura.animation = null;
-    };
   }
 
   // Area-preserving squish: wider and shorter, then back, with a tiny hop.
@@ -1537,7 +1500,7 @@
       const x = 1 + deformation;
       frames.push({ offset: t, scale: `${x} ${1 / x}`, translate: `0 ${-deformation * 28}px` });
     }
-    return pill.animate(frames, { duration: AURA_DURATION, easing: "linear", fill: "both", composite: "add" });
+    return surfaceOf(pill).animate(frames, { duration: AURA_DURATION, easing: "linear", fill: "both", composite: "add" });
   }
 
   function auraBounce(pill) {
@@ -1584,7 +1547,7 @@
     if (auraReduced.matches || !animationsAllowed()) {
       if (entered) {
         state.frames = [{ sx: x, sy: y }];
-        state.animation = pill.animate([{ scale: `${x} ${y}` }], { duration: 0, fill: "forwards", composite: "add" });
+        state.animation = surfaceOf(pill).animate([{ scale: `${x} ${y}` }], { duration: 0, fill: "forwards", composite: "add" });
         state.animation.persist();
       } else aura.hovers.delete(pill);
       return;
@@ -1600,7 +1563,7 @@
       else { sx = Math.min(cx, sx); sy = Math.min(cy, sy); }
       state.frames.push({ sx, sy });
     }
-    const animation = pill.animate(state.frames.map(({ sx, sy }, k) => ({ offset: k / 60, scale: `${sx} ${sy}` })),
+    const animation = surfaceOf(pill).animate(state.frames.map(({ sx, sy }, k) => ({ offset: k / 60, scale: `${sx} ${sy}` })),
       { duration: entered ? 560 : 640, easing: "linear", fill: "forwards", composite: "add" });
     state.animation = animation;
     // A press squish on the same property would otherwise let Firefox drop

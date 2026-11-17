@@ -337,7 +337,8 @@
   opacity: 0;
   background: var(--still-pill);
   border: 1px solid var(--still-line);
-  box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), var(--still-shadow);
+  border-color: var(--still-slot-edge);
+  box-shadow: var(--still-slot-shadow);
   transform: translateX(var(--entry-x, 0px)) translateY(-64px) scale(.96);
   -moz-window-dragging: no-drag;
   transition:
@@ -1239,67 +1240,8 @@
 /* Tab aura (ported from Still's native build): one light travels behind
    the tabs to the selected one (still-window.js: auraMove). */
 #still-chrome .slot { transition-property: transform, opacity, background-color, border-color, box-shadow; }
-#still-chrome .slot.active {
-  --still-glass-tint: var(--still-pill-active);
-  border-color: color-mix(in srgb, var(--still-accent) 34%, transparent);
-}
+#still-chrome .slot.active { --still-glass-tint: var(--still-pill-active); }
 #still-chrome .slot.active:hover { --still-glass-tint: var(--still-pill-active); }
-/* Glass shine in the top-left corner: soft on the selected tab, full on hover. */
-#still-chrome .slot:not(.empty)::before {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: 12px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 220ms ease;
-  background: radial-gradient(ellipse 95% 100% at 22% 0%, rgba(var(--still-shine-rgb), .13), transparent 72%);
-}
-#still-chrome .slot.active::before { opacity: .45; }
-#still-chrome .slot:not(.empty):hover::before { opacity: 1; }
-
-#still-tab-aura-wrap {
-  position: absolute;
-  height: var(--still-toolbar-height);
-  pointer-events: none;
-  opacity: 0;
-  translate: 0 -64px;
-  transition: translate 430ms var(--still-ease), opacity 210ms ease;
-}
-#still-chrome:is(.open, :focus-within) #still-tab-aura-wrap { opacity: 1; translate: 0 0; }
-#still-tab-aura {
-  position: absolute;
-  top: -18px;
-  left: 0;
-  width: var(--still-aura-w);
-  height: 79px;
-  transform: translate3d(var(--still-aura-x), 0, 0) scale(var(--still-aura-sx), var(--still-aura-sy));
-  transform-origin: center;
-  opacity: var(--still-aura-o);
-  background:
-    radial-gradient(ellipse 48% 35% at 50% 61%, rgba(var(--still-aura-rgb), .30), rgba(var(--still-aura-rgb), .10) 46%, transparent 100%),
-    radial-gradient(ellipse 42% 30% at 50% 51%, rgba(var(--still-shine-rgb), .09), transparent 100%);
-}
-
-#still-chrome .slot:not(.empty)::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  pointer-events: none;
-  /* The same light as #still-tab-aura, as it shows through the tab. */
-  --still-aura-t: calc(var(--still-aura-o) * .42);
-  background:
-    radial-gradient(calc(var(--still-aura-w) * .48 * var(--still-aura-sx)) calc(27.65px * var(--still-aura-sy))
-      at calc(var(--still-aura-x) + var(--still-aura-w) / 2 - var(--pill-x, 0px)) calc(21.5px + 8.69px * var(--still-aura-sy)),
-      rgba(var(--still-aura-rgb), calc(.30 * var(--still-aura-t))), rgba(var(--still-aura-rgb), calc(.10 * var(--still-aura-t))) 46%, transparent 100%),
-    radial-gradient(calc(var(--still-aura-w) * .42 * var(--still-aura-sx)) calc(23.7px * var(--still-aura-sy))
-      at calc(var(--still-aura-x) + var(--still-aura-w) / 2 - var(--pill-x, 0px)) calc(21.5px + .79px * var(--still-aura-sy)),
-      rgba(var(--still-shine-rgb), calc(.09 * var(--still-aura-t))), transparent 100%);
-}
-
-
-
 /* The text shimmer: like a chat assistant's thinking line, the letters
    brighten as the band crosses them. */
 #still-chrome .slot:not(.empty) .slot-title {
@@ -1352,7 +1294,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #still-chrome .slot:not(.empty)::after { display: none; }
 
 }
 
@@ -1631,8 +1572,8 @@
 }
 
 /* A slot the agent is working in, while you look at another one. */
-#still-chrome .slot.agent-busy {
-  box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), 0 0 0 1.5px rgba(var(--still-aura-rgb), .55), var(--still-shadow);
+#still-chrome .slot.agent-busy .slot-surface {
+  border-color: rgba(var(--still-agent-rgb), .7);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1647,23 +1588,13 @@
 #still-chrome .slot-row.reordering,
 #still-chrome .slot-row.reordering .slot { cursor: grabbing; }
 
-#still-chrome .slot.lifted {
-  z-index: 3;
-  scale: 1.045;
-  --still-glass-tint: var(--still-pill-hover);
-  border-color: color-mix(in srgb, var(--still-text) 18%, var(--still-line));
-  box-shadow: inset 0 0 0 .5px var(--still-glass-highlight), 0 18px 42px rgba(0, 0, 0, .30), 0 5px 14px rgba(0, 0, 0, .16);
-  transition-property: transform, opacity, background-color, border-color, box-shadow, scale;
-  transition-duration: 430ms, 210ms, 130ms, 130ms, 180ms, 180ms;
-  transition-timing-function: var(--still-ease), ease, var(--still-ease-out), var(--still-ease-out), var(--still-ease-out-strong), var(--still-ease-out-strong);
-  transition-delay: 0ms;
-}
-/* Letting go: the lift settles on the drop spring. */
-#still-chrome .slot-row.reordering .slot:not(.lifted) {
-  transition-property: transform, opacity, background-color, border-color, box-shadow, scale;
-  transition-duration: 430ms, 210ms, 170ms, 170ms, 320ms, 420ms;
-  transition-timing-function: var(--still-ease), ease, ease, ease, var(--still-ease-out-strong), var(--still-ease-spring);
-  transition-delay: 0ms;
+#still-chrome .slot.lifted { z-index: 3; }
+#still-chrome .slot.lifted .slot-surface {
+  scale: 1.035;
+  background-color: var(--still-slot-lifted);
+  border-color: var(--still-slot-lifted-edge);
+  box-shadow: var(--still-slot-lifted-shadow);
+  transition-duration: 130ms, 130ms, 180ms, 220ms;
 }
 
 /* ----------------------------------------------------------------- drops */
@@ -1686,15 +1617,12 @@
   transition: opacity 140ms var(--still-ease-out), scale 200ms var(--still-ease-out-strong);
 }
 #still-chrome .slot:is(.drop-load, .drop-new, .drop-replace) .slot-drop-hint { opacity: 1; scale: 1; }
-#still-chrome .slot:is(.drop-load, .drop-new) {
-  border-color: rgba(var(--still-agent-rgb), .75);
-  box-shadow: 0 0 0 2px rgba(var(--still-agent-rgb), .28), var(--still-shadow);
+#still-chrome .slot.empty:is(.drop-load, .drop-new),
+#still-chrome .slot:is(.drop-load, .drop-new) .slot-surface {
+  border-color: rgba(var(--still-agent-rgb), .85);
 }
 #still-chrome .slot.empty:is(.drop-load, .drop-new) { border-style: solid; }
-#still-chrome .slot.drop-replace {
-  border-color: rgba(200, 70, 70, .75);
-  box-shadow: 0 0 0 2px rgba(200, 70, 70, .25), var(--still-shadow);
-}
+#still-chrome .slot.drop-replace .slot-surface { border-color: rgba(200, 70, 70, .9); }
 #still-chrome .slot.drop-replace .slot-drop-hint { color: #fff; background: #c84646; }
 #still-chrome .slot.drop-consumed { opacity: 0 !important; transition-duration: 430ms, 120ms !important; }
 
@@ -1725,7 +1653,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #still-chrome .slot.lifted { scale: 1; }
+  #still-chrome .slot.lifted .slot-surface { scale: 1; }
   #still-chrome .slot-drop-hint,
   .still-slot-ghost { scale: 1; transition: opacity 150ms var(--still-ease-out); }
 }
@@ -1980,4 +1908,68 @@
   #still-agent-narration,
   .agent-pointer-label { scale: 1 !important; transition: opacity 150ms var(--still-ease-out) !important; }
   #still-agent-narration { translate: 0 0; }
+}
+
+/* ----------------------------------------------------------- slot surface
+   A slot's fill and edge live on .slot-surface, the only part that wobbles,
+   lifts and leans; the icon and title above it never scale, so they stay
+   sharp. One edge treatment per theme, never a hairline plus a diffuse
+   shadow: light slots float on a small shadow; dark and OLED slots get one
+   quiet hairline and no shadow (the bar's scrim already separates them).
+   The current slot is the brighter fill (and, in the dark themes, a
+   brighter hairline). */
+
+:root[still] {
+  --still-slot-edge: transparent;
+  --still-slot-shadow: 0 1px 2px rgba(0, 0, 0, .2), 0 3px 10px rgba(0, 0, 0, .1);
+  --still-slot-active-edge: transparent;
+  --still-slot-lifted: #fff;
+  --still-slot-lifted-edge: transparent;
+  --still-slot-lifted-shadow: 0 10px 28px rgba(0, 0, 0, .32), 0 2px 6px rgba(0, 0, 0, .18);
+}
+@media (prefers-color-scheme: dark) {
+  :root[still] {
+    --still-slot-edge: rgba(255, 255, 255, .075);
+    --still-slot-shadow: none;
+    --still-slot-active-edge: rgba(255, 255, 255, .17);
+    --still-slot-lifted: #2b2e2c;
+    --still-slot-lifted-edge: rgba(255, 255, 255, .2);
+    --still-slot-lifted-shadow: 0 12px 30px rgba(0, 0, 0, .55);
+  }
+}
+:root[still][still-theme="oled"] {
+  --still-slot-edge: rgba(255, 255, 255, .1);
+  --still-slot-active-edge: rgba(255, 255, 255, .24);
+  --still-slot-lifted: #141414;
+  --still-slot-lifted-edge: rgba(255, 255, 255, .3);
+  --still-slot-lifted-shadow: 0 12px 30px rgba(0, 0, 0, .7);
+}
+
+#still-chrome .slot-row > .slot:not(.empty) {
+  isolation: isolate;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+#still-chrome .slot-surface {
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border: 1px solid var(--still-slot-edge);
+  border-radius: 14px;
+  background-color: var(--still-glass-tint);
+  box-shadow: var(--still-slot-shadow);
+  pointer-events: none;
+  transition: background-color 150ms var(--still-ease-out), border-color 150ms var(--still-ease-out),
+    box-shadow 220ms var(--still-ease-out-strong), scale 320ms var(--still-ease-spring);
+}
+#still-chrome .slot.active .slot-surface { border-color: var(--still-slot-active-edge); }
+#still-chrome .slot:not(.active):hover .slot-surface { border-color: color-mix(in srgb, var(--still-slot-edge), var(--still-slot-active-edge)); }
+/* Empty slots: a dashed outline is their whole edge, and the label stays
+   readable on the bar's scrim (about 5:1 in light, more in dark). */
+#still-chrome .slot.empty {
+  color: color-mix(in srgb, var(--still-text) 74%, transparent);
+  background: color-mix(in srgb, var(--still-pill) 86%, transparent);
+  border-color: color-mix(in srgb, var(--still-muted) 45%, transparent);
+  box-shadow: none;
 }

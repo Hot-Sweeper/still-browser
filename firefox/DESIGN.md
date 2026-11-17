@@ -5,12 +5,23 @@ the window controls slide in from the top edge when the pointer reaches it.
 
 ## Surfaces and colour
 - Slots and controls are solid tints (`--still-pill`, `--still-pill-hover`,
-  `--still-pill-strong`), with a thin light line (`--still-line`) and a soft
-  shadow. There are no blurs, because Firefox cannot blur another process's
-  page.
-- Themes: system, light, dark and OLED. OLED sets the surfaces to pure black
-  and keeps an outline. Text uses `--still-text` and `--still-muted`.
-- The current slot carries a soft aura (`--still-aura-rgb`).
+  `--still-pill-strong`). There are no blurs, because Firefox cannot blur
+  another process's page.
+- One edge treatment per theme, never a hairline plus a diffuse shadow:
+  light slots float on a small shadow (`--still-slot-shadow`), dark and OLED
+  slots get one quiet hairline (`--still-slot-edge`, 7.5% / 10% white) and no
+  shadow, since the bar's scrim already separates them. No inner highlight
+  lines, corner shines or glows.
+- The current slot is the brighter fill (`--still-pill-active`), with a
+  brighter hairline in the dark themes (`--still-slot-active-edge`) and its
+  title at full strength. The light that used to travel behind the slots is
+  gone: it read as a smudge behind the current title.
+- A slot's fill and edge live on `.slot-surface`, the only part that wobbles
+  (hover, press, the landing squish), lifts and leans. Icons and titles never
+  scale, so they stay sharp; a dragged slot moves in device-pixel steps.
+- Themes: system, light, dark and OLED. OLED sets the surfaces to pure black.
+  Text uses `--still-text` and `--still-muted`. Empty slots are a dashed
+  outline with their label at 74% text colour.
 
 ## Motion tokens
 - `--still-ease`: `cubic-bezier(.16, 1, .3, 1)`, for the bar's entrance and
@@ -38,16 +49,18 @@ the window controls slide in from the top edge when the pointer reaches it.
   and maximize grows.
 
 ## Rearranging slots
-- A slot is picked up after 5 px of movement. It lifts (scale 1.045, a
-  deeper shadow), follows the pointer one to one, moves a little vertically
-  under resistance, and leans up to 3° with its speed. Past the first or
-  last place it rubber-bands.
+- A slot is picked up after 5 px of movement. Its surface lifts (scale
+  1.035, opaque `--still-slot-lifted` fill, a deeper shadow or a brighter
+  hairline in the dark themes) and leans up to 2° with its speed while the
+  title stays level. It follows the pointer one to one, moves a little
+  vertically under resistance, and rubber-bands past the first or last
+  place.
 - The other slots make room on springs (`ROOM_SPRING`, ω 30, ζ .86) as soon
   as the dragged slot crosses half a slot. Letting go drops it from where it
   is with its release speed (`DROP_SPRING`, ω 24, ζ .8); the lift settles on
   `--still-ease-spring`. Springs retarget from their current state, so
   nothing restarts. Motion uses `translate` and `rotate`, never `transform`
-  (the bar's entrance owns that). The current slot's aura rides along.
+  (the bar's entrance owns that).
 - Escape puts the slot back. Ctrl+Shift+Left/Right moves the focused slot
   on the same springs, and a screen reader hears where it went.
 - Drops onto the row: a link, text or file from a page shows "Open here" on
@@ -58,7 +71,7 @@ the window controls slide in from the top edge when the pointer reaches it.
 
 ## Agents
 - The agent has its own colour, `--still-agent-rgb` (green, lighter in dark
-  mode), used for its pointer, rings and lights. The bar's aura stays sage.
+  mode), used for its pointer, rings and lights.
 - The agent mark (a four-point star) appears only while an agent is
   connected. It breathes at rest and turns while the agent works. When the
   agent stops, it eases on to the next resting angle. The agent's hidden
