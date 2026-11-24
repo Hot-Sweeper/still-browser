@@ -2532,9 +2532,9 @@
 .icon-select-list { position: relative; display: grid; gap: 1px; max-height: 330px; overflow: auto; scrollbar-width: thin; overscroll-behavior: contain; }
 .icon-select-highlight {
   position: absolute;
-  top: 5px;
-  left: 5px;
-  right: 5px;
+  top: 0;
+  left: 0;
+  right: 0;
   border-radius: 8px;
   background: color-mix(in srgb, var(--still-text) 9%, transparent);
   opacity: 0;
@@ -2572,3 +2572,26 @@
 /* OLED: switches that are on use a deep, saturated green on the black,
    not the pastel one of the dark theme. */
 :root[still-theme="oled"] #still-layer :is(.settings-row, .agent-gallery-switch)[aria-checked="true"] .agent-switch { background: #1fa35c; }
+#still-layer .icon-select-more {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  padding: 6px 10px;
+  color: var(--still-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--still-text) 8%, transparent);
+  border-radius: 0 0 8px 8px;
+  cursor: pointer;
+  outline: none;
+}
+#still-layer .icon-select-more:hover { color: var(--still-text); }
+#still-layer .icon-select-more-chevron { width: 14px; height: 14px; transition: rotate 200ms var(--still-ease-out-strong); }
+#still-layer .icon-select-more[aria-expanded="true"] .icon-select-more-chevron { rotate: 180deg; }
+#still-layer .icon-select-option.older .icon-select-name { font-weight: 500; color: color-mix(in srgb, var(--still-text) 75%, var(--still-muted)); }
