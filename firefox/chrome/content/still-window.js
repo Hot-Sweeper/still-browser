@@ -3592,39 +3592,133 @@
     return { on: on.value, off: off.value, label, note: on.description || choice.description || "" };
   }
 
-  // Reasoning as a slider: one stop per level, the names beneath, the
-  // chosen one bright. Dragging previews; letting go applies.
+  // Reasoning as rising bars, one per level, like a signal meter: the lit
+  // bars warm from calm green through amber to hot red as the agent thinks
+  // harder. The level's name and the agent's own note sit beside them.
+  // Drag across, click a bar, or use the arrow keys; letting go applies.
   function effortSlider(label, choice, value, onChange) {
     const values = choice.values;
-    const short = (name) => name.replace(/^Default.*$/i, "Auto").replace(/^Extra High$/i, "XHigh");
+    const count = values.length;
     let index = Math.max(0, values.findIndex((item) => item.value === value));
-    const range = h("input", { type: "range", class: "effort-range", min: "0", max: String(values.length - 1), step: "1", value: String(index), "aria-label": label });
-    const shown = h("span", { class: "settings-value" });
-    const ticks = h("div", { class: "effort-ticks" }, ...values.map((item, i) => {
-      const tick = h("button", { type: "button", tabindex: "-1", text: short(item.name), title: item.description || item.name });
-      tick.style.setProperty("--at", values.length > 1 ? String(i / (values.length - 1)) : "0");
-      tick.addEventListener("click", () => { range.value = String(i); paint(); commit(); });
-      return tick;
-    }));
-    const paint = () => {
-      const i = Number(range.value);
-      range.style.setProperty("--p", values.length > 1 ? String(i / (values.length - 1)) : "0");
-      shown.textContent = values[i].name;
-      range.setAttribute("aria-valuetext", values[i].name);
-      [...ticks.children].forEach((tick, n) => tick.classList.toggle("on", n === i));
+    let preview = index;
+    const heat = (i) => {
+      const t = count > 1 ? i / (count - 1) : 0;
+      // green (calm) -> amber -> red (all out), in OKLCH so it stays even.
+      const hue = 150 - t * 125;
+      return `oklch(${0.74 - t * 0.08} ${0.13 + t * 0.07} ${hue})`;
+    };
+    const name = h("strong", { class: "effort-name" });
+    const note = h("small", { class: "effort-note" });
+    const bars = h("div", { class: "effort-bars", role: "slider", tabindex: "0", "aria-label": label,
+      "aria-valuemin": "0", "aria-valuemax": String(count - 1) });
+    for (let i = 0; i < count; i++) {
+      const bar = h("span", { class: "effort-bar", title: values[i].name });
+      bar.style.setProperty("--h", `${28 + (72 * (count > 1 ? i / (count - 1) : 1))}%`);
+      bar.style.setProperty("--heat", heat(i));
+      bars.append(bar);
+    }
+    const paint = (i, animate = false) => {
+      preview = i;
+      const item = values[i];
+      name.textContent = item.name.replace(/^Default.*$/i, "Auto");
+      name.style.color = heat(i);
+      note.textContent = item.description || "";
+      bars.setAttribute("aria-valuenow", String(i));
+      bars.setAttribute("aria-valuetext", item.name);
+      bars.style.setProperty("--glow", heat(i));
+      [...bars.children].forEach((bar, n) => {
+        const lit = n <= i;
+        if (animate && lit !== bar.classList.contains("lit") && animationsAllowed()) {
+          bar.animate([{ scale: "1 .6" }, { scale: "1 1.08" }, { scale: "1 1" }], { duration: 300, delay: Math.abs(n - index) * 18, easing: "cubic-bezier(.23, 1, .32, 1)" });
+        }
+        bar.classList.toggle("lit", lit);
+        bar.classList.toggle("top", n === i);
+      });
     };
     const commit = () => {
-      const i = Number(range.value);
-      if (i === index) return;
-      index = i;
-      onChange(values[i].value);
+      if (preview === index) return;
+      index = preview;
+      onChange(values[index].value);
     };
-    range.addEventListener("input", paint);
-    range.addEventListener("change", commit);
-    paint();
-    return h("div", { class: "settings-row slider-row" },
-      h("span", { class: "slider-head" }, h("strong", { text: label }), shown),
-      h("div", { class: "effort-track" }, range, ticks));
+    const at = (event) => {
+      const box = bars.getBoundingClientRect();
+      return Math.max(0, Math.min(count - 1, Math.floor((event.clientX - box.left) / (box.width / count))));
+    };
+    let dragging = false;
+    bars.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      bars.setPointerCapture(event.pointerId);
+      paint(at(event), true);
+    });
+    bars.addEventListener("pointermove", (event) => {
+      if (dragging) { const i = at(event); if (i !== preview) paint(i, true); }
+    });
+    const end = () => { if (!dragging) return; dragging = false; commit(); };
+    bars.addEventListener("pointerup", end);
+    bars.addEventListener("pointercancel", end);
+    bars.addEventListener("keydown", (event) => {
+      const step = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
+      const jump = event.key === "Home" ? 0 : event.key === "End" ? count - 1 : null;
+      if (step === undefined && jump === null) return;
+      event.preventDefault();
+      paint(jump ?? Math.max(0, Math.min(count - 1, preview + step)), true);
+      commit();
+    });
+    paint(index);
+    return h("div", { class: "settings-row effort-row" },
+      h("span", { class: "settings-copy" }, h("strong", { text: label }), h("span", { class: "effort-readout" }, name, note)),
+      bars);
+  }
+
+  // A dropdown whose choices carry icons (native selects cannot): the
+  // chosen one shows on the button; the list opens beneath it.
+  function iconSelect(label, items, value, onPick) {
+    let current = items.find((item) => item.id === value) || items[0];
+    const face = h("span", { class: "icon-select-face" });
+    const button = h("button", { type: "button", class: "icon-select", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-label": label },
+      face, icon([["path", { d: "m7 10 5 5 5-5" }]], "icon-select-chevron"));
+    const list = h("div", { class: "icon-select-list", role: "listbox", hidden: true });
+    const glyph = (item) => item.logo ? h("img", { src: item.logo, alt: "" }) : h("span", { class: "logo-letter", text: item.name[0] });
+    const paintFace = () => face.replaceChildren(glyph(current), h("span", { text: current.name }));
+    const close = () => {
+      if (list.hidden) return;
+      list.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", outside, true);
+    };
+    const outside = (event) => { if (!list.contains(event.target) && !button.contains(event.target)) close(); };
+    const open = () => {
+      list.replaceChildren(...items.map((item) => {
+        const option = h("button", { type: "button", class: "icon-select-option", role: "option", "aria-selected": String(item.id === current.id) },
+          glyph(item), h("span", { text: item.name }));
+        option.addEventListener("click", () => {
+          close();
+          button.focus();
+          if (item.id === current.id) return;
+          current = item;
+          paintFace();
+          onPick(item.id);
+        });
+        return option;
+      }));
+      list.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      if (animationsAllowed()) list.animate([{ opacity: 0, transform: "translateY(-4px) scale(.98)" }, { opacity: 1, transform: "none" }], { duration: 160, easing: "cubic-bezier(0, 0, .58, 1)" });
+      list.querySelector('[aria-selected="true"]')?.focus();
+      document.addEventListener("pointerdown", outside, true);
+    };
+    button.addEventListener("click", () => (list.hidden ? open() : close()));
+    list.addEventListener("keydown", (event) => {
+      const options = [...list.children];
+      const at = options.indexOf(document.activeElement);
+      if (event.key === "ArrowDown") { event.preventDefault(); options[Math.min(options.length - 1, at + 1)]?.focus(); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); options[Math.max(0, at - 1)]?.focus(); }
+      else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); button.focus(); }
+    });
+    paintFace();
+    return h("div", { class: "settings-row info icon-select-row" },
+      h("span", { class: "settings-copy" }, h("strong", { text: label })),
+      h("span", { class: "icon-select-wrap" }, button, list));
   }
 
   const AGENT_LOGOS = { codex: "resource://still/logos/openai.svg", claude: "resource://still/logos/claude.svg", t3: "resource://still/logos/t3.png" };
@@ -3729,7 +3823,6 @@
         const agent = agents.find((candidate) => candidate.id === id);
         if (!agent || !chat) { chatExtra.replaceChildren(); return; }
         const rows = h("div", { class: "settings-rows" });
-        const harnessSlot = h("div");
         // The agent's own options, in a steady order: which harness (T3),
         // model, reasoning as a slider, speed and other switches, then mode.
         const ORDER = { harness: -1, model: 0, thought_level: 1, model_config: 2, mode: 3 };
@@ -3737,10 +3830,10 @@
         const fill = (options) => {
           const sorted = [...options].filter((choice) => choice.values.length > 1).sort((a, b) => (ORDER[a.category] ?? 4) - (ORDER[b.category] ?? 4));
           const harness = sorted.find((choice) => choice.category === "harness");
-          harnessSlot.replaceChildren(...(harness ? [logoRow("Harness", harness.values.map((item) => ({ id: item.value, name: item.name, logo: HARNESS_LOGOS[item.value] || "" })),
+          const harnessRow = harness ? iconSelect("Harness", harness.values.map((item) => ({ id: item.value, name: item.name, logo: HARNESS_LOGOS[item.value] || "" })),
             harness.values.some((item) => item.value === chat.savedChoice(agent.id, harness.id)) ? chat.savedChoice(agent.id, harness.id) : harness.value,
-            { small: true, onPick: (id) => { chat.applyChoice(agent.id, harness.id, id); reload(); } })] : []));
-          rows.replaceChildren(...sorted.filter((choice) => choice !== harness).map((choice) => {
+            (id) => { chat.applyChoice(agent.id, harness.id, id); reload(); }) : null;
+          rows.replaceChildren(...(harnessRow ? [harnessRow] : []), ...sorted.filter((choice) => choice !== harness).map((choice) => {
             const saved = chat.savedChoice(agent.id, choice.id);
             const current = choice.values.some((item) => item.value === saved) ? saved : choice.value;
             const apply = (value) => {
@@ -3762,7 +3855,7 @@
           chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); },
             (error) => { if (rows.isConnected && !known.length) rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: error.message || `${agent.name} did not answer.` })))); });
         }
-        chatExtra.replaceChildren(harnessSlot, rows);
+        chatExtra.replaceChildren(rows);
       };
       const items = agents.map((agent) => {
         let logo = AGENT_LOGOS[agent.id] || "";
