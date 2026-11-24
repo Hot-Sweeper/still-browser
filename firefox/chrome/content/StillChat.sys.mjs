@@ -25,11 +25,34 @@ const PREF_AGENTS = "still.chat.agents";
 
 // Built-in agents. `command` is looked up on PATH ("still" is Still's own
 // launcher, ~/.local/bin/still, which runs the pinned adapters).
+// `requires` is the harness's own command: an agent shows only when it is
+// installed. Gemini CLI, OpenCode and Qwen Code speak ACP themselves and
+// appear as soon as they are installed.
 const BUILT_IN = [
-  { id: "codex", name: "Codex", kind: "acp", command: "still", args: ["acp", "codex"], login: "codex login" },
-  { id: "claude", name: "Claude Code", kind: "acp", command: "still", args: ["acp", "claude"], login: "claude, then /login" },
-  { id: "t3", name: "T3 Code", kind: "t3", command: "t3" }
+  { id: "codex", name: "Codex", kind: "acp", command: "still", args: ["acp", "codex"], login: "codex login", requires: "codex" },
+  { id: "claude", name: "Claude Code", kind: "acp", command: "still", args: ["acp", "claude"], login: "claude, then /login", requires: "claude" },
+  { id: "t3", name: "T3 Code", kind: "t3", command: "t3", requires: "t3" },
+  { id: "gemini", name: "Gemini CLI", kind: "acp", command: "gemini", args: ["--experimental-acp"], requires: "gemini", optional: true },
+  { id: "opencode", name: "OpenCode", kind: "acp", command: "opencode", args: ["acp"], requires: "opencode", optional: true },
+  { id: "qwen", name: "Qwen Code", kind: "acp", command: "qwen", args: ["--experimental-acp"], requires: "qwen", optional: true }
 ];
+
+function searchDirs() {
+  const path = Services.env.get("PATH") || "";
+  return [...path.split(":"), PathUtils.join(home(), ".local", "bin"), PathUtils.join(home(), ".t3", "bin"), "/usr/local/bin", "/usr/bin"].filter(Boolean);
+}
+
+// Quick, synchronous: is this command on the computer?
+function commandExists(name) {
+  for (const dir of searchDirs()) {
+    try {
+      const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+      file.initWithPath(PathUtils.join(dir, name));
+      if (file.exists()) return true;
+    } catch {}
+  }
+  return false;
+}
 
 function home() {
   return Services.dirsvc.get("Home", Ci.nsIFile).path;
@@ -42,14 +65,13 @@ export function chatAgents() {
   const custom = (Array.isArray(extra) ? extra : [])
     .filter((agent) => agent?.id && (agent.kind === "openai" ? /^https?:\/\//.test(agent.endpoint || "") : agent?.command))
     .map((agent) => ({ kind: "acp", args: [], ...agent, name: agent.name || agent.id }));
-  return [...BUILT_IN, ...custom.filter((agent) => !BUILT_IN.some((built) => built.id === agent.id))];
+  const installed = BUILT_IN.filter((agent) => !agent.requires || commandExists(agent.requires));
+  return [...installed, ...custom.filter((agent) => !BUILT_IN.some((built) => built.id === agent.id))];
 }
 
 async function findCommand(name) {
   if (name.includes("/")) return name;
-  const path = Services.env.get("PATH") || "";
-  const dirs = [...path.split(":"), PathUtils.join(home(), ".local", "bin"), PathUtils.join(home(), ".t3", "bin"), "/usr/local/bin", "/usr/bin"];
-  for (const dir of dirs) {
+  for (const dir of searchDirs()) {
     if (!dir) continue;
     const candidate = PathUtils.join(dir, name);
     try { if (await IOUtils.exists(candidate)) return candidate; } catch {}
@@ -255,11 +277,14 @@ export class AcpChat {
   // What the person can choose, as [{ id, name, value, values: [{ value, name }] }].
   choices() {
     const flat = (option) => (option.options || []).flatMap((item) => item.options ? item.options : [item]);
+    // Everything the agent offers about how it works: model, reasoning
+    // effort, speed and similar switches, and its permission mode.
     const list = this.options
-      .filter((option) => option.type === "select" && ["model", "thought_level"].includes(option.category))
-      .map((option) => ({ id: option.id, name: option.name, value: option.currentValue, values: flat(option).map((item) => ({ value: item.value, name: item.name })) }));
+      .filter((option) => option.type === "select" && ["model", "thought_level", "model_config", "mode"].includes(option.category))
+      .map((option) => ({ id: option.id, name: option.name, category: option.category, description: option.description || "", value: option.currentValue,
+        values: flat(option).map((item) => ({ value: item.value, name: item.name, description: item.description || "" })) }));
     if (!list.some((choice) => choice.id === "model") && !list.some((choice) => /model/i.test(choice.name)) && this.models?.availableModels?.length) {
-      list.unshift({ id: "__model", name: "Model", value: this.models.currentModelId,
+      list.unshift({ id: "__model", name: "Model", category: "model", value: this.models.currentModelId,
         values: this.models.availableModels.map((model) => ({ value: model.modelId, name: model.name })) });
     }
     return list;
@@ -349,7 +374,7 @@ export class AcpChat {
 
 // ------------------------------------------------------------------- T3
 
-const PROVIDER_NAMES = { codex: "Codex", claudeAgent: "Claude", cursor: "Cursor", grok: "Grok", opencode: "OpenCode" };
+const PROVIDER_NAMES = { codex: "Codex", claudeAgent: "Claude", cursor: "Cursor", grok: "Grok", opencode: "OpenCode", antigravity: "Antigravity", gemini: "Gemini" };
 
 // A conversation as a T3 Code thread, through T3's command line. T3 runs the
 // agent (its own provider, model and Still tools). Still polls the thread
@@ -383,26 +408,75 @@ export class T3Chat {
     try { return JSON.parse(out.slice(start)); } catch { return null; }
   }
 
-  // T3 has no model list on its command line, so the choices are the
-  // provider and model pairs of your recent T3 chats, newest first.
+  // T3's own model manifest: every current model of every provider, and
+  // per model the options T3 offers for it (reasoning, fast mode, ...).
+  // Without it, the provider and model pairs of your recent T3 chats.
+  async readManifest() {
+    const base = Services.env.get("T3CODE_HOME") || PathUtils.join(home(), ".t3");
+    try {
+      const manifest = (await IOUtils.readJSON(PathUtils.join(base, "userdata", "model-manifest.json")))?.manifest;
+      let defaults = null;
+      try { defaults = (await IOUtils.readJSON(PathUtils.join(base, "userdata", "settings.json")))?.defaultModelSelection; } catch {}
+      return manifest ? { manifest, defaults } : null;
+    } catch { return null; }
+  }
+
   async start() {
-    const { out, exitCode } = await this.t3(["thread", "list", "--project", this.projectPath(), "--json"]).catch(() => ({ out: "", exitCode: -1 }));
-    const threads = exitCode === 0 ? this.json(out) : null;
-    if (!Array.isArray(threads)) throw Object.assign(new Error("T3 Code is not running. Open the T3 Code app, then try again."), { code: "missing" });
-    const seen = new Map();
-    for (const thread of threads) {
-      if (!thread.providerInstanceId || !thread.model) continue;
-      const value = `${thread.providerInstanceId}/${thread.model}`;
-      if (!seen.has(value)) seen.set(value, { value, name: `${PROVIDER_NAMES[thread.providerInstanceId] || thread.providerInstanceId} · ${thread.model}` });
+    const found = await this.readManifest();
+    this.models = new Map();
+    if (found) {
+      const { manifest, defaults } = found;
+      for (const [provider, slugs] of Object.entries(manifest.currentModels || {})) {
+        const info = manifest.providers?.[provider] || {};
+        for (const slug of slugs) {
+          const model = (info.models || []).find((item) => item.slug === slug) || { slug, name: slug };
+          const profile = info.profiles?.[model.profile] || info.profiles?.[slug] || {};
+          this.models.set(`${provider}/${slug}`, {
+            name: `${PROVIDER_NAMES[provider] || provider} · ${model.name || slug}`,
+            descriptors: profile.capabilities?.optionDescriptors || info.defaults?.capabilities?.optionDescriptors || []
+          });
+        }
+      }
+      if (defaults?.instanceId && defaults?.model && this.models.has(`${defaults.instanceId}/${defaults.model}`)) this.selection ||= `${defaults.instanceId}/${defaults.model}`;
     }
-    this.values = [...seen.values()].slice(0, 12);
-    if (!this.values.length) throw new Error("Start one chat in T3 Code first, so Still knows which provider and model to use.");
-    this.selection ||= this.values[0].value;
+    if (!this.models.size) {
+      const { out, exitCode } = await this.t3(["thread", "list", "--project", this.projectPath(), "--json"]).catch(() => ({ out: "", exitCode: -1 }));
+      const threads = exitCode === 0 ? this.json(out) : null;
+      if (!Array.isArray(threads)) throw Object.assign(new Error("T3 Code is not running. Open the T3 Code app, then try again."), { code: "missing" });
+      for (const thread of threads) {
+        if (!thread.providerInstanceId || !thread.model) continue;
+        const value = `${thread.providerInstanceId}/${thread.model}`;
+        if (!this.models.has(value)) this.models.set(value, { name: `${PROVIDER_NAMES[thread.providerInstanceId] || thread.providerInstanceId} · ${thread.model}`, descriptors: [] });
+      }
+      if (!this.models.size) throw new Error("Start one chat in T3 Code first, so Still knows which provider and model to use.");
+    }
+    // What you picked before (in Settings or the chat) wins over T3's default.
+    const saved = Services.prefs.getStringPref("still.chat.choice.t3.model", "");
+    if (this.models.has(saved)) this.selection = saved;
+    this.selection ||= this.models.keys().next().value;
+    this.optionValues ||= {};
+    for (const descriptor of this.models.get(this.selection)?.descriptors || []) {
+      const value = Services.prefs.getStringPref(`still.chat.choice.t3.option:${descriptor.id}`, "");
+      if (value && !(descriptor.id in this.optionValues)) this.optionValues[descriptor.id] = value;
+    }
     this.emitOptions();
   }
 
+  // The chosen model's options, as the same kind of choices ACP agents give.
+  modelOptions() {
+    return (this.models.get(this.selection)?.descriptors || []).map((descriptor) => {
+      const boolean = descriptor.type === "boolean";
+      const values = boolean ? [{ value: "false", name: "Off" }, { value: "true", name: "On" }]
+        : (descriptor.options || []).map((option) => ({ value: option.id, name: option.label || option.id, description: option.description || "" }));
+      const fallback = boolean ? "false" : ((descriptor.options || []).find((option) => option.isDefault)?.id || values[0]?.value);
+      return { id: `option:${descriptor.id}`, name: descriptor.label || descriptor.id, category: /effort|reason/i.test(descriptor.id) ? "thought_level" : "model_config",
+        value: this.optionValues[descriptor.id] ?? fallback, defaultValue: fallback, values };
+    });
+  }
+
   emitOptions() {
-    this.emit({ type: "options", options: [{ id: "model", name: "Model", value: this.selection, values: this.values }] });
+    const values = [...this.models].map(([value, model]) => ({ value, name: model.name }));
+    this.emit({ type: "options", options: [{ id: "model", name: "Model", category: "model", value: this.selection, values }, ...this.modelOptions()] });
   }
 
   projectPath() {
@@ -417,6 +491,12 @@ export class T3Chat {
       // Chats go into T3's "No project" (its scratch folder).
       const [provider, ...model] = (this.selection || "").split("/");
       const pick = provider && model.length ? ["--provider", provider, "--model", model.join("/")] : [];
+      // Options differing from T3's default for this model, as id=value.
+      if (pick.length) {
+        for (const option of this.modelOptions()) {
+          if (option.value !== option.defaultValue) pick.push("--option", `${option.id.slice(7)}=${option.value}`);
+        }
+      }
       result = await this.t3(["thread", "start", this.projectPath(), "-", "--title", `Still: ${this.firstLine(blocks)}`, ...pick, "--json"], message);
       const data = this.json(result.out);
       this.threadId = data?.threadId || data?.thread?.threadId || data?.id || (result.out.match(/[0-9a-f]{8}-[0-9a-f-]{27}/) || [])[0] || null;
@@ -471,7 +551,13 @@ export class T3Chat {
   }
 
   async choose(id, value) {
-    if (id !== "model" || !this.values?.some((item) => item.value === value)) return;
+    if (id.startsWith("option:")) {
+      this.optionValues[id.slice(7)] = value;
+      if (this.threadId) this.emit({ type: "notice", text: "The new setting is used from your next new chat." });
+      this.emitOptions();
+      return;
+    }
+    if (id !== "model" || !this.models?.has(value)) return;
     this.selection = value;
     // A thread keeps its model; a new choice starts the next chat with it.
     if (this.threadId) this.emit({ type: "notice", text: "The new model is used from your next new chat." });
@@ -523,7 +609,7 @@ export class OpenAIChat {
 
   emitOptions() {
     const values = [{ value: "", name: "Server default" }, ...this.models.map((id) => ({ value: id, name: id }))];
-    this.emit({ type: "options", options: [{ id: "model", name: "Model", value: this.model, values }] });
+    this.emit({ type: "options", options: [{ id: "model", name: "Model", category: "model", value: this.model, values }] });
   }
 
   async prompt(blocks) {

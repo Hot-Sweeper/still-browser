@@ -315,7 +315,9 @@
   // Model and reasoning choices from the agent, remembered per agent.
   function renderChoices(options) {
     const agent = state.agent;
-    choiceRow.replaceChildren(...options.map((choice) => {
+    // The panel shows model and reasoning; Settings has every option.
+    const shown = options.filter((choice) => !choice.category || ["model", "thought_level"].includes(choice.category));
+    choiceRow.replaceChildren(...shown.map((choice) => {
       const current = choice.values.find((item) => item.value === choice.value);
       const button = h("button", { type: "button", class: "chat-choice", "aria-haspopup": "menu", title: choice.name },
         h("span", { text: current?.name || choice.value || choice.name }), icon(ICONS.chevron, "chat-chevron"));
@@ -760,11 +762,19 @@
   const PREF_OPTIONS = "still.chat.options.";
   function rememberChoices(agent, options) {
     if (!agent || !options.length) return;
-    try { Services.prefs.setStringPref(`${PREF_OPTIONS}${agent.id}`, JSON.stringify(options)); } catch {}
+    try { Services.prefs.setStringPref(`${PREF_OPTIONS}${agent.id}`, JSON.stringify({ at: Date.now(), options })); } catch {}
   }
 
   function knownChoices(agentId) {
-    try { return JSON.parse(Services.prefs.getStringPref(`${PREF_OPTIONS}${agentId}`, "[]")); } catch { return []; }
+    try {
+      const saved = JSON.parse(Services.prefs.getStringPref(`${PREF_OPTIONS}${agentId}`, "[]"));
+      return Array.isArray(saved) ? saved : saved.options || [];
+    } catch { return []; }
+  }
+
+  // How old the remembered choices are (Infinity when there are none).
+  function choicesAge(agentId) {
+    try { return Date.now() - (JSON.parse(Services.prefs.getStringPref(`${PREF_OPTIONS}${agentId}`, "{}")).at || 0); } catch { return Infinity; }
   }
 
   // Settings asks for an agent's choices it has not seen yet: a short-lived
@@ -798,6 +808,6 @@
     if (state.chat) switchAgent();
   }
 
-  window.StillChat = { open, close, toggle, isOpen: () => state.open, agents: () => agents(), knownChoices, loadChoices, applyChoice, selectAgent,
+  window.StillChat = { open, close, toggle, isOpen: () => state.open, agents: () => agents(), knownChoices, choicesAge, loadChoices, applyChoice, selectAgent,
     savedChoice: (agentId, id) => Services.prefs.getStringPref(`${PREF_CHOICE}${agentId}.${id}`, "") };
 })();

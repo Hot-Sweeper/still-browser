@@ -3677,16 +3677,37 @@
         const agent = agents.find((candidate) => candidate.id === id);
         if (!agent || !chat) { chatExtra.replaceChildren(); return; }
         const rows = h("div", { class: "settings-rows" });
-        const fill = (options) => rows.replaceChildren(...options.map((choice) => {
-          const name = /model/i.test(`${choice.id} ${choice.name}`) ? "Model" : /effort|reason|thought/i.test(`${choice.id} ${choice.name}`) ? "Effort" : choice.name;
-          return choiceSelect(name, choice, chat.savedChoice(agent.id, choice.id), (value) => chat.applyChoice(agent.id, choice.id, value));
-        }));
+        // The agent's own options, in a steady order: model, effort, its
+        // on/off switches (fast mode and the like), then its permission mode.
+        const ORDER = { model: 0, thought_level: 1, model_config: 2, mode: 3 };
+        const isSwitch = (choice) => {
+          const values = choice.values.map((item) => String(item.value).toLowerCase()).sort().join(",");
+          return values === "off,on" || values === "false,true";
+        };
+        const fill = (options) => rows.replaceChildren(...[...options]
+          .sort((a, b) => (ORDER[a.category] ?? 4) - (ORDER[b.category] ?? 4))
+          .map((choice) => {
+            const name = choice.category === "model" ? "Model" : choice.category === "thought_level" ? "Effort" : choice.name;
+            const saved = chat.savedChoice(agent.id, choice.id);
+            if (isSwitch(choice)) {
+              const onValue = choice.values.find((item) => /^(on|true)$/i.test(item.value)).value;
+              const offValue = choice.values.find((item) => /^(off|false)$/i.test(item.value)).value;
+              const current = choice.values.some((item) => item.value === saved) ? saved : choice.value;
+              return settingSwitch(name, choice.description || "", current === onValue, (on) => chat.applyChoice(agent.id, choice.id, on ? onValue : offValue));
+            }
+            return choiceSelect(name, choice, saved, (value) => {
+              chat.applyChoice(agent.id, choice.id, value);
+              // T3's options belong to the model: show the new model's own.
+              if (agent.kind === "t3" && choice.category === "model") chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); }, () => {});
+            });
+          }));
         const known = chat.knownChoices(agent.id);
         if (known.length) fill(known);
-        else {
-          rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: `Asking ${agent.name} for its models…` }))));
+        else rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: `Asking ${agent.name} what it offers…` }))));
+        // Ask again when what we know is old, so new models show up.
+        if (!known.length || chat.choicesAge(agent.id) > 10 * 60 * 1000) {
           chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); },
-            (error) => { if (rows.isConnected) rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: error.message || `${agent.name} did not answer.` })))); });
+            (error) => { if (rows.isConnected && !known.length) rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: error.message || `${agent.name} did not answer.` })))); });
         }
         chatExtra.replaceChildren(rows);
       };

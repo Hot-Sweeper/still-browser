@@ -68,15 +68,23 @@ if (mode === 'mcp') {
   // `still acp codex|claude`: an Agent Client Protocol adapter on stdio, for
   // Still's side chat (or any ACP client). Adapters are pinned in agent/.
   const adapters = {
-    codex: '@agentclientprotocol/codex-acp/dist/index.js',
-    claude: '@agentclientprotocol/claude-agent-acp/dist/index.js'
+    codex: '@agentclientprotocol/codex-acp',
+    claude: '@agentclientprotocol/claude-agent-acp'
   };
-  const entry = adapters[rest[0]];
+  // Each adapter's own command, from its package.json "bin": newer versions
+  // no longer export their files by path.
+  const adapterEntry = (name) => {
+    const manifest = require.resolve(`${name}/package.json`, { paths: [path.join(__dirname, 'agent')] });
+    const { bin, main } = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    const file = typeof bin === 'string' ? bin : Object.values(bin || {})[0] || main || 'dist/index.js';
+    return path.join(path.dirname(manifest), file);
+  };
+  const entry = adapters[rest[0]] ? adapterEntry(adapters[rest[0]]) : null;
   if (!entry) {
     console.error(`Usage: still acp ${Object.keys(adapters).join('|')}`);
     process.exitCode = 2;
   } else {
-    const child = require('node:child_process').spawn(process.execPath, [require.resolve(entry, { paths: [path.join(__dirname, 'agent')] }), ...rest.slice(1)], { stdio: 'inherit' });
+    const child = require('node:child_process').spawn(process.execPath, [entry, ...rest.slice(1)], { stdio: 'inherit' });
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal));
     child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
   }
