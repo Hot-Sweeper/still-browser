@@ -85,6 +85,29 @@ Rules that keep it that way:
 - Neighbouring slots and hovered slots are warmed so their first paint is ready
   before the switch.
 
+### WebGL on NVIDIA (Linux)
+
+Release Firefox hands WebGL frames to the compositor by reading each one back
+through the CPU on NVIDIA's proprietary driver, because zero-copy DMA-BUF
+WebGL is blocklisted there (bug 1924578, wrong content on driver 550). Nightly
+allows it again from driver 580.76.05 (470.256.02 on the legacy branch, bug
+1981326), and `still.cfg` applies the same rule through the default of
+`gfx.blacklist.dmabuf-webgl`. `node firefox/tools/bench-webgl.js` measures it
+on the LEMON three.js scene at 3840x2160 (hidden KWin desktop, RTX 3080,
+driver 620.73, i9-13900K):
+
+| | Readback (Firefox default) | DMA-BUF (Still) | Chromium 156, same machine |
+| --- | --- | --- | --- |
+| Uncapped fps | ~40 | 250 to 295 | 184 to 222 |
+| Frame time p50 / p99 | 29 / 55 ms | 3.2 / 7 to 8 ms | 2.7 to 3.8 / 22 to 30 ms |
+| At 60 Hz vsync | ~37 fps, frames of 33 and 50 ms | 60 fps, every frame 16.7 ms | |
+
+The remaining cost is the page's own JavaScript (three.js, about 3 ms a
+frame). Tried and left off: the native Wayland compositor
+(`gfx.webrender.compositor.force-enabled`, slower: ~205 fps), the GPU process,
+`webgl.gl_khr_no_error` and `__GL_THREADED_OPTIMIZATIONS` (no measurable
+change). To undo, set `gfx.blacklist.dmabuf-webgl` to 4 in about:config.
+
 ### Startup
 
 The browser starts its own Still Search service (port 48230; reuses one that
@@ -225,6 +248,10 @@ and live view as above).
   tabs on them, and checks the agent's pointer, panel and a real agent client
   on disposable headless profiles. Set `STILL_CHECK_THEME=dark` for another
   appearance. Captures go to `firefox/.local/checks/arrange-*.png`.
+- `node firefox/tools/bench-webgl.js suite --configs FILE --out FILE` runs a
+  WebGL frame-rate benchmark: each config (`[{ "name", "prefs", "env" }]`)
+  gets its own browser on a disposable profile and a separate runtime copy.
+  Run it inside a hidden desktop (agent workspace), never on your screen.
 - `npm run firefox:check-ui` drives a disposable profile through Marionette and
   writes window captures to `firefox/.local/checks/`. Pages there see a
   remote-controlled browser (robot icon in the window), so never use that
