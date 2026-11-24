@@ -122,7 +122,7 @@
   function otherSlotCount() {
     let count = 0;
     for (const win of stillWindows()) {
-      count += win.StillChrome.slotTabs().filter((tab) => !tab.stillLeaving).length;
+      count += win.StillChrome.slotTabs().filter((tab) => !tab.stillLeaving && !tab.stillDragging).length;
     }
     return count;
   }
@@ -398,7 +398,28 @@
       element.style.setProperty("--enter-delay", `${Math.min(190, Math.round(distance / 4.4))}ms`);
       element.style.setProperty("--entry-x", `${Math.max(-18, Math.min(18, (cursorX - center) / 24))}px`);
     }
+    const opening = !chrome.classList.contains("open");
     chrome.classList.add("open");
+    if (opening && Services.prefs.getBoolPref("still.debug.frames", false)) reportFrames("Bar");
+  }
+
+  // still.debug.frames: how smoothly an animation was composited, from
+  // Firefox's own frame recorder (what reaches the screen, not just the
+  // main thread). Shown as a toast and in the browser console.
+  function reportFrames(label, duration = 520) {
+    const utils = window.windowUtils;
+    let start;
+    try { start = utils.startFrameTimeRecording(); } catch { return; }
+    setTimeout(() => {
+      let frames = [];
+      try { frames = utils.stopFrameTimeRecording(start).slice(1); } catch {}
+      if (!frames.length) return;
+      const average = frames.reduce((sum, ms) => sum + ms, 0) / frames.length;
+      const worst = Math.max(...frames);
+      const text = `${label}: ${Math.round(1000 / average)} fps, worst frame ${worst.toFixed(1)} ms (${utils.layerManagerType})`;
+      console.log(`[Still] ${text}`, frames.map((ms) => +ms.toFixed(1)));
+      showToast(text, 4000);
+    }, duration);
   }
 
   function chromeBusy() {
@@ -630,28 +651,47 @@
   }
 
   // ------------------------------------------------------------- reordering
-  // Slots are picked up with the pointer. After a few pixels the slot lifts,
-  // follows the pointer one to one and leans into its motion, while the
-  // others slide aside on springs to open the place where it will land.
-  // Letting go drops it there from wherever it is, keeping its speed, so the
-  // motion never restarts. Escape puts it back. Ctrl+Shift+Left and Right
-  // move the focused slot without dragging.
+  // Slots are picked up with the pointer, through Firefox's own drag and
+  // drop, the only kind of drag that can cross into another window. Still
+  // hides the system's drag image and draws the slot itself: it follows the
+  // pointer on a quick spring and leans into its motion, while the others
+  // slide aside to open the place where it will land. Letting go drops it
+  // there from wherever it is, keeping its speed. Escape puts it back.
+  // Ctrl+Shift+Left and Right move the focused slot without dragging.
+  //
+  // Pulled down, a slot stretches away from the bar like rubber and springs
+  // back when let go. Pulled hard enough it tears off: it catches up with
+  // the pointer and sticks to it, the others close up, and letting go opens
+  // it in a window of its own (the same Still window, with one slot).
+  // Dragged onto another Still window it moves there instead.
 
-  const REORDER_THRESHOLD = 5;
-  // Pulled this far down out of the bar, a slot comes off into its own
-  // window (or, alone in a window, goes back to the other one).
-  const DETACH_PULL = 72;
-  const DETACH_KEEP = 52;
+  const SLOT_TYPE = "application/x-still-slot";
+  const TEAR_PULL = 120;       // pointer travel below the grab point that tears a slot off
+  const REDOCK_PULL = 56;      // a torn slot brought back this close rejoins the row
+  const STRETCH_REACH = 44;    // how far a docked slot gives before it tears
   // Critically damped: slots glide into place and stop, without bouncing.
   const ROOM_SPRING = { omega: 30, zeta: 1 };      // slots making room
   const DROP_SPRING = { omega: 24, zeta: 1 };      // a slot settling after release
+  const FOLLOW_SPRING = { omega: 62, zeta: 1 };    // the held slot trailing the pointer
+  const TEAR_SPRING = { omega: 26, zeta: 0.74 };   // tearing off: catches up with a little give
+  const REDOCK_SPRING = { omega: 34, zeta: 0.9 };
   const LEAN_SPRING = { omega: 22, zeta: 0.9 };
   const slotMotion = new Map();                    // pill -> spring state
   let reorder = null;
+  let pendingDrag = null;
   let motionFrame = 0;
   let motionAt = 0;
   const slotLive = h("span", { class: "visually-hidden", role: "status", "aria-live": "polite" });
   layer.append(slotLive);
+  // A clear sheet over the pages while a slot is dragged, so the drag is
+  // seen by Still and not by the page under the pointer.
+  const dragCatcher = h("div", { id: "still-drag-catcher", "aria-hidden": "true", hidden: true });
+  layer.prepend(dragCatcher);
+  // The slot as it follows the pointer through another window.
+  const floatGhost = h("div", { class: "still-slot-float", "aria-hidden": "true" });
+  layer.append(floatGhost);
+  const blankImage = document.createElementNS(HTML, "canvas");
+  blankImage.width = blankImage.height = 1;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -665,11 +705,16 @@
     return value < min ? min - give : max + give;
   }
 
+  // Downward pull on a docked slot: generous at first, then stiffer.
+  function stretch(pull) {
+    return STRETCH_REACH * (1 - 1 / (pull / STRETCH_REACH + 1));
+  }
+
   function motionOf(pill) {
     let m = slotMotion.get(pill);
     if (!m) {
       const title = pill.querySelector(".slot-title");
-      m = { x: 0, v: 0, target: 0, y: 0, vy: 0, rot: 0, vr: 0, lean: 0, held: false, spring: ROOM_SPRING,
+      m = { x: 0, v: 0, target: 0, y: 0, vy: 0, ty: 0, rot: 0, vr: 0, lean: 0, held: false, spring: ROOM_SPRING,
         left: pill.offsetLeft, titleLeft: title ? title.offsetLeft : 0 };
       slotMotion.set(pill, m);
     }
@@ -700,7 +745,7 @@
     }
     for (const [pill, m] of slotMotion) {
       if (instant) {
-        if (!m.held) { m.x = m.target; m.y = 0; }
+        m.x = m.target; m.y = m.ty;
         m.v = m.vy = m.vr = m.rot = 0;
       } else {
         // Small fixed steps keep the springs stable on slow frames.
@@ -708,22 +753,20 @@
         while (left > 0) {
           const dt = Math.min(left, 1 / 240);
           left -= dt;
-          if (!m.held) {
-            [m.x, m.v] = springStep(m.x, m.v, m.target, m.spring, dt);
-            [m.y, m.vy] = springStep(m.y, m.vy, 0, m.spring, dt);
-          }
+          [m.x, m.v] = springStep(m.x, m.v, m.target, m.spring, dt);
+          [m.y, m.vy] = springStep(m.y, m.vy, m.ty, m.spring, dt);
           [m.rot, m.vr] = springStep(m.rot, m.vr, m.held ? m.lean : 0, LEAN_SPRING, dt);
         }
       }
       const settled = !m.held && Math.abs(m.x - m.target) < 0.3 && Math.abs(m.v) < 8
-        && Math.abs(m.y) < 0.3 && Math.abs(m.vy) < 8 && Math.abs(m.rot) < 0.05 && Math.abs(m.vr) < 1;
-      if (settled && !m.target) {
+        && Math.abs(m.y - m.ty) < 0.3 && Math.abs(m.vy) < 8 && Math.abs(m.rot) < 0.05 && Math.abs(m.vr) < 1;
+      if (settled && !m.target && !m.ty) {
         pill.style.removeProperty("translate");
         surfaceOf(pill).style.removeProperty("rotate");
         slotMotion.delete(pill);
         continue;
       }
-      if (settled) { m.x = m.target; m.v = 0; }
+      if (settled) { m.x = m.target; m.y = m.ty; m.v = m.vy = 0; }
       // Device-pixel steps keep the title on the pixel grid, so it stays
       // sharp while it moves. Only the surface leans; the text stays level.
       const px = 1 / (window.devicePixelRatio || 1);
@@ -734,7 +777,7 @@
       pill.querySelector(".slot-title")?.style.setProperty("--title-x", `${m.left + m.x + m.titleLeft}px`);
     }
     auraFollowMotion();
-    const busy = [...slotMotion.values()].some((m) => m.held || m.x !== m.target || m.v || m.y || m.rot);
+    const busy = [...slotMotion.values()].some((m) => m.held || m.x !== m.target || m.v || m.y !== m.ty || m.vy || m.rot);
     if (busy) motionFrame = window.requestAnimationFrame(stepMotion);
     else if (!reorder?.active && !dropPreview) settleMotion();
   }
@@ -769,30 +812,39 @@
     return new Map([...slotRow.children].map((pill) => [pill, pill.offsetLeft + (slotMotion.get(pill)?.x || 0)]));
   }
 
-  function attachReorder(pill) {
-    pill.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || reorder || dropPreview || event.target.closest("button, input, form")
-          || state.editingTab === pill.stillTab || (slotTabs().length < 2 && !stillWindows().length)) return;
-      reorder = { pill, tab: pill.stillTab, id: event.pointerId, startX: event.clientX, startY: event.clientY, active: false };
-      try { pill.setPointerCapture(event.pointerId); } catch {}
-    });
-    pill.addEventListener("pointermove", (event) => {
-      if (reorder?.pill !== pill || event.pointerId !== reorder.id) return;
-      if (!reorder.active) {
-        if (Math.hypot(event.clientX - reorder.startX, event.clientY - reorder.startY) < REORDER_THRESHOLD) return;
-        beginReorder(event);
-      }
-      dragReorder(event);
-    });
-    const end = (event, cancel) => {
-      if (reorder?.pill === pill && event.pointerId === reorder.id) finishReorder({ cancel });
-    };
-    pill.addEventListener("pointerup", (event) => end(event, false));
-    pill.addEventListener("pointercancel", (event) => end(event, true));
-    pill.addEventListener("lostpointercapture", (event) => end(event, false));
+  // A slot can be picked up when there is somewhere for it to go.
+  function canDragSlot() {
+    return slotTabs().length >= 2 || stillWindows().length > 0;
   }
 
-  function beginReorder(event) {
+  function attachReorder(pill) {
+    pill.setAttribute("draggable", "true");
+    pill.addEventListener("pointerdown", (event) => {
+      pendingDrag = null;
+      if (event.button !== 0 || reorder || dropPreview || event.target.closest("button, input, form")
+          || state.editingTab === pill.stillTab) return;
+      pendingDrag = { pill, tab: pill.stillTab, startX: event.clientX, startY: event.clientY };
+    });
+    pill.addEventListener("dragstart", (event) => {
+      const p = pendingDrag;
+      pendingDrag = null;
+      if (!p || p.pill !== pill || reorder || dropPreview || state.editingTab === p.tab || !canDragSlot()) {
+        event.preventDefault();
+        return;
+      }
+      event.stopPropagation();
+      const dt = event.dataTransfer;
+      dt.setData(SLOT_TYPE, String(p.tab.linkedBrowser?.browserId || ""));
+      dt.effectAllowed = "move";
+      // Still draws the slot; the system's drag image stays out of the way.
+      try { dt.setDragImage(blankImage, 0, 0); } catch {}
+      reorder = { ...p, active: false };
+      beginReorder(p);
+      dragReorder(event);
+    });
+  }
+
+  function beginReorder(start) {
     const r = reorder;
     r.active = true;
     r.tabs = slotTabs();
@@ -803,41 +855,77 @@
     r.step = r.lefts.length > 1 ? r.lefts[1] - r.lefts[0] : r.pill.offsetWidth;
     const m = motionOf(r.pill);
     m.held = true;
-    m.v = m.vy = 0;
+    m.spring = FOLLOW_SPRING;
     // A slot caught while it is still settling continues from where it is.
-    r.baseX = m.x - (event.clientX - r.startX);
-    r.baseY = m.y - (event.clientY - r.startY);
-    r.lastX = event.clientX;
+    r.baseX = m.x;
+    r.baseY = m.y;
+    r.lastX = start.startX;
     r.lastAt = performance.now();
     r.velocity = 0;
+    r.torn = false;
     state.draggedTab = r.tab;
+    // The other windows leave room for it while it is on the move.
+    r.tab.stillDragging = true;
     finishEdit({ animate: false });
     showChrome();
     clearTimeout(state.hideTimer);
     slotRow.classList.add("reordering");
     r.pill.classList.add("lifted");
+    for (const win of [window, ...stillWindows()]) win.StillChrome?.slotDragActive?.(true);
+    // If the system ends the drag without telling (it happens), finish it
+    // here, so the sheet over the pages never stays.
+    r.watch = setInterval(() => {
+      if (reorder !== r) { clearInterval(r.watch); return; }
+      if (!dragSessionAlive()) {
+        if (r.torn && slotTabs().length >= 2) finishReorder();
+        else finishReorder({ cancel: !r.droppedHere });
+      }
+    }, 250);
+  }
+
+  function dragSessionAlive() {
+    const service = Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService);
+    for (const win of [window, ...stillWindows()]) {
+      try { if (service.getCurrentSession(win)) return true; } catch {}
+    }
+    return false;
   }
 
   function dragReorder(event) {
     const r = reorder;
+    if (!r?.active) return;
+    // Some drag events carry no position (outside the window, on Linux).
+    if (!event.clientX && !event.clientY && !event.screenX && !event.screenY) return;
     const m = motionOf(r.pill);
     const now = performance.now();
     const dt = Math.max(4, now - r.lastAt);
     r.velocity = r.velocity * 0.55 + ((event.clientX - r.lastX) / dt * 1000) * 0.45;
     r.lastX = event.clientX;
     r.lastAt = now;
-    const min = r.lefts[0] - r.lefts[r.from];
-    const max = r.lefts[r.lefts.length - 1] - r.lefts[r.from];
-    m.x = rubber(r.baseX + event.clientX - r.startX, min, max);
+    const dx = event.clientX - r.startX;
     const pull = event.clientY - r.startY;
-    const detach = canDetach(r) && pull > (r.detach ? DETACH_KEEP : DETACH_PULL);
-    if (detach !== r.detach) setDetach(r, detach);
-    // Vertical movement is allowed a little, so the slot reads as picked up;
-    // pulled down past the bar it follows further, on its way out.
-    m.y = detach ? rubber(pull * 0.7, 0, 60, 40) : rubber((r.baseY + pull) * 0.35, -4, 8, 10);
-    m.lean = 0;
-    const to = detach ? r.from : clamp(Math.round((r.lefts[r.from] + m.x - r.lefts[0]) / r.step), 0, r.list.length - 1);
-    if (detach) {
+    const canTear = slotTabs().length >= 2;
+    if (!r.torn && canTear && pull > TEAR_PULL) setTorn(r, true);
+    else if (r.torn && pull < REDOCK_PULL) setTorn(r, false);
+    const since = now - (r.modeAt || 0);
+    if (r.torn) {
+      // Stuck to the pointer, leaning into a fling.
+      m.target = r.baseX + dx;
+      m.ty = r.baseY + pull;
+      m.spring = since < 260 ? TEAR_SPRING : FOLLOW_SPRING;
+      m.lean = clamp(r.velocity / 320, -5, 5);
+    } else {
+      const min = r.lefts[0] - r.lefts[r.from];
+      const max = r.lefts[r.lefts.length - 1] - r.lefts[r.from];
+      m.target = rubber(r.baseX + dx, min, max);
+      // Up gives a little; down stretches away from the bar, stiffer the
+      // further it goes, until it tears.
+      m.ty = pull >= 0 ? stretch(pull) : rubber(pull * 0.35, -4, 0, 8);
+      m.spring = r.modeAt && since < 220 ? REDOCK_SPRING : FOLLOW_SPRING;
+      m.lean = 0;
+    }
+    const to = r.torn ? r.from : clamp(Math.round((r.lefts[r.from] + m.target - r.lefts[0]) / r.step), 0, r.list.length - 1);
+    if (r.torn) {
       // The others close up, as the row will look once it has left.
       r.to = r.from;
       r.list.forEach((pill, index) => {
@@ -846,8 +934,8 @@
         other.target = index > r.from ? -r.step : 0;
         other.spring = ROOM_SPRING;
       });
-    } else if (to !== r.to || r.wasDetached) {
-      r.wasDetached = false;
+    } else if (to !== r.to || r.redocked) {
+      r.redocked = false;
       r.to = to;
       r.list.forEach((pill, index) => {
         if (pill === r.pill) return;
@@ -862,24 +950,23 @@
     kickMotion();
   }
 
+  function setTorn(r, on) {
+    r.torn = on;
+    r.modeAt = performance.now();
+    if (!on) r.redocked = true;
+    r.pill.classList.toggle("torn", on);
+    slotLive.textContent = on ? "Release to open this slot in its own window" : "";
+  }
+
+  // The pointer left this window during a drag (or came back).
+  function setAway(on) {
+    if (!reorder?.active || reorder.away === on) return;
+    reorder.away = on;
+    reorder.pill.classList.toggle("away", on);
+  }
+
   // ------------------------------------------------------------ detaching
-  // A slot pulled down out of the bar and let go opens in a window of its
-  // own: the same Still window, with one slot, and this row has one fewer.
-  // Firefox moves the live page across (nothing reloads). A slot alone in
-  // its window, pulled down the same way, goes back into the other window.
-
-  function canDetach(r) {
-    return slotTabs().length >= 2 || stillWindows().length > 0;
-  }
-
-  function setDetach(r, on) {
-    r.detach = on;
-    if (!on) r.wasDetached = true;
-    r.pill.classList.toggle("detach-ready", on);
-    const hint = r.pill.querySelector(".slot-drop-hint");
-    if (hint) hint.textContent = on ? (slotTabs().length >= 2 ? "Own window" : "Put back") : "";
-    slotLive.textContent = on ? (slotTabs().length >= 2 ? "Release to open this slot in its own window" : "Release to put this slot back") : "";
-  }
+  // Firefox moves the live page into the new window (nothing reloads).
 
   function detachSlot(tab) {
     if (!tab || tab.closing) return false;
@@ -894,11 +981,17 @@
       // If the new window never takes it, the slot stays here as before.
       setTimeout(() => {
         state.detachingUntil = 0;
-        if (!tab.closing && gBrowser.tabs.includes(tab)) { tab.stillLeaving = false; queueRender(); notifyPeers(); }
+        if (!tab.closing && gBrowser.tabs.includes(tab)) {
+          tab.stillLeaving = false;
+          const pill = pills.get(tab);
+          pill?.stillTearAnimation?.cancel();
+          queueRender();
+          notifyPeers();
+        }
       }, 8000);
       return true;
     }
-    // Back to the window with the most slots, after its last one.
+    // Alone in its window: back to the window with the most slots.
     const target = stillWindows().sort((a, b) => b.StillChrome.slotTabs().length - a.StillChrome.slotTabs().length)[0];
     if (!target) return false;
     const theirs = target.StillChrome.slotTabs();
@@ -912,6 +1005,14 @@
     return true;
   }
 
+  // Letting go of a torn slot: it swells and fades as its window opens.
+  function playTearAway(pill) {
+    if (!animationsAllowed()) return;
+    pill.stillTearAnimation = pill.animate(
+      [{ opacity: 1, scale: "1" }, { opacity: 0, scale: "1.28" }],
+      { duration: 260, easing: "cubic-bezier(.2, .8, .2, 1)", fill: "forwards" });
+  }
+
   // The click that ends a drag must not also switch to the slot.
   function swallowNextClick() {
     const swallow = (event) => { event.stopPropagation(); event.preventDefault(); };
@@ -919,30 +1020,44 @@
     setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
   }
 
-  function finishReorder({ cancel = false } = {}) {
+  function finishReorder({ cancel = false, moved = false } = {}) {
     const r = reorder;
     reorder = null;
+    pendingDrag = null;
     if (!r) return;
-    try { r.pill.releasePointerCapture(r.id); } catch {}
+    clearInterval(r.watch);
     if (!r.active) return;
     swallowNextClick();
     state.draggedTab = null;
-    r.pill.classList.remove("lifted");
-    if (r.detach) {
-      setDetach(r, false);
-      if (!cancel && detachSlot(r.tab)) {
-        for (const pill of r.list) { const m = motionOf(pill); m.held = false; m.target = 0; m.spring = ROOM_SPRING; }
+    r.tab.stillDragging = false;
+    for (const win of [window, ...stillWindows()]) win.StillChrome?.slotDragActive?.(false);
+    notifyPeers();
+    r.pill.classList.remove("lifted", "torn", "away");
+    slotLive.textContent = "";
+    const m = motionOf(r.pill);
+    m.held = false;
+    m.ty = 0;
+    if (moved) {
+      // It went to another window; this row closes up when it re-renders.
+      for (const pill of r.list) { const other = motionOf(pill); other.target = 0; other.ty = 0; other.spring = ROOM_SPRING; }
+      kickMotion();
+      return;
+    }
+    if (r.torn && !cancel) {
+      playTearAway(r.pill);
+      if (detachSlot(r.tab)) {
+        m.target = m.x; m.ty = m.y;            // it stays where it was let go, fading
+        for (const pill of r.list) if (pill !== r.pill) motionOf(pill).spring = ROOM_SPRING;
         kickMotion();
         return;
       }
+      r.pill.stillTearAnimation?.cancel();
     }
-    const m = motionOf(r.pill);
-    m.held = false;
     m.spring = DROP_SPRING;
     m.v = cancel ? 0 : clamp(r.velocity, -2400, 2400);
     m.vy = 0;
     const tabs = slotTabs();
-    const to = cancel ? r.from : r.to;
+    const to = cancel || r.torn ? r.from : r.to;
     const target = tabs[to];
     if (to !== r.from && target && target !== r.tab && tabs.includes(r.tab)) {
       const visual = visualLefts();
@@ -956,6 +1071,125 @@
     for (const pill of r.list) if (pill !== r.pill) motionOf(pill).spring = ROOM_SPRING;
     kickMotion();
     if (!revealOpen) scheduleChromeHide(900);
+  }
+
+  // ------------------------------------------------- slots across windows
+  // While any Still window drags a slot, every Still window lays a clear
+  // sheet over its pages (slotDragActive), so it sees the drag wherever the
+  // pointer is. The window the slot came from steers its own row; any other
+  // window shows its bar, the slot following the pointer, and the place in
+  // the row where it would land.
+
+  function draggedSlotTab() {
+    for (const win of stillWindows()) {
+      const tab = win.StillChrome?.state?.draggedTab;
+      if (tab && !tab.closing) return tab;
+    }
+    return null;
+  }
+
+  function slotDragActive(on) {
+    dragCatcher.hidden = !on;
+    if (!on) {
+      floatGhost.classList.remove("visible");
+      if (dropPreview?.kind === "slot") clearDropPreview();
+    }
+  }
+
+  function placeFloat(event, tab) {
+    if (floatGhost.stillTab !== tab) {
+      floatGhost.stillTab = tab;
+      floatGhost.replaceChildren(faviconFor(tab), h("span", { class: "slot-title-plain", text: slotTitle(tab) }));
+    }
+    const width = slotRow.children[0]?.offsetWidth || 220;
+    floatGhost.style.width = `${width}px`;
+    floatGhost.style.translate = `${Math.round(event.clientX - width / 2)}px ${Math.round(event.clientY - 21)}px`;
+    floatGhost.classList.add("visible");
+  }
+
+  let slotLeaveTimer = 0;
+  function isSlotDrag(event) {
+    return [...(event.dataTransfer?.types || [])].includes(SLOT_TYPE);
+  }
+
+  function onSlotDragOver(event) {
+    if (!isSlotDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    clearTimeout(slotLeaveTimer);
+    if (reorder?.active) { setAway(false); dragReorder(event); return; }
+    const tab = draggedSlotTab();
+    if (!tab) return;
+    clearTimeout(state.hideTimer);
+    if (!chrome.classList.contains("open")) showChrome(event.clientX / window.innerWidth);
+    placeFloat(event, tab);
+    setDropPreview(dropPlan("slot", dropIndexAt(event.clientX)));
+  }
+
+  window.addEventListener("dragenter", onSlotDragOver, true);
+  window.addEventListener("dragover", onSlotDragOver, true);
+  window.addEventListener("dragleave", (event) => {
+    if (!isSlotDrag(event) || event.relatedTarget) return;
+    clearTimeout(slotLeaveTimer);
+    slotLeaveTimer = setTimeout(() => {
+      if (reorder?.active) { setAway(true); return; }
+      floatGhost.classList.remove("visible");
+      clearDropPreview();
+      if (!revealOpen) scheduleChromeHide(400);
+    }, 80);
+  }, true);
+  window.addEventListener("drop", (event) => {
+    if (!isSlotDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearTimeout(slotLeaveTimer);
+    if (reorder?.active) { reorder.droppedHere = true; return; }
+    receiveSlot(event);
+  }, true);
+
+  // The drag ended: where it ended decides what happens.
+  document.addEventListener("dragend", (event) => {
+    const r = reorder;
+    if (!r?.active || !isSlotDrag(event)) return;
+    const dt = event.dataTransfer;
+    if (dt.mozUserCancelled) finishReorder({ cancel: true });
+    else if (r.droppedHere) finishReorder();
+    else if (dt.dropEffect === "move" || r.tab.closing || !gBrowser.tabs.includes(r.tab)) finishReorder({ moved: true });
+    else {
+      // Let go outside every Still window: it becomes a window of its own.
+      if (slotTabs().length >= 2) r.torn = true;
+      finishReorder();
+    }
+  }, true);
+
+  // A slot dropped here from another Still window moves into this row.
+  function receiveSlot(event) {
+    const tab = draggedSlotTab();
+    floatGhost.classList.remove("visible");
+    if (!tab) { clearDropPreview(); return; }
+    const plan = dropPreview?.kind === "slot" ? dropPreview : dropPlan("slot", dropIndexAt(event.clientX));
+    const tabs = slotTabs();
+    const before = tabs[plan.index];
+    const tabIndex = before ? tabPos(before) : tabs.length ? tabPos(tabs[tabs.length - 1]) + 1 : 0;
+    const visual = visualLefts();
+    dropPreview = null;
+    dropGhost.classList.remove("visible");
+    for (const node of slotRow.querySelectorAll(".drop-consumed")) node.classList.remove("drop-consumed");
+    tab.stillLeaving = true;
+    let adopted = null;
+    try { adopted = gBrowser.adoptTab(tab, { tabIndex, selectTab: true }); } catch (error) { console.error(error); }
+    if (!adopted) { tab.stillLeaving = false; clearDropPreview(); kickMotion(); return; }
+    renderSlots();
+    rebaseMotion(visual);
+    const pill = pills.get(adopted);
+    if (pill && animationsAllowed()) {
+      surfaceOf(pill).animate([{ scale: ".94" }, { scale: "1" }], { duration: 280, easing: "cubic-bezier(.23, 1, .32, 1)", composite: "add" });
+    }
+    kickMotion();
+    window.focus();
+    slotLive.textContent = `${slotTitle(adopted)} moved here`;
+    scheduleChromeHide(1400);
   }
 
   // ----------------------------------------------------------------- drops
@@ -977,6 +1211,7 @@
 
   function dropKind(event) {
     const types = [...(event.dataTransfer?.types || [])];
+    if (types.includes(SLOT_TYPE)) return null;          // handled by onSlotDragOver
     if (types.includes(AGENT_TAB_TYPE)) return "agent";
     return LINK_TYPES.some((type) => types.includes(type)) ? "link" : null;
   }
@@ -998,6 +1233,8 @@
     const tabs = slotTabs();
     const tab = tabs[index] || null;
     if (kind === "link") return { kind, index, tab, mode: tab ? "load" : "new", hint: tab ? "Open here" : "Open in a new slot" };
+    // A slot from another window: the five-slot total stays the same.
+    if (kind === "slot") return { kind, index: Math.min(index, tabs.length), tab, mode: "insert", hint: "", agentTab: draggedSlotTab() };
     const agentTab = state.draggingAgentTab;
     if (tabs.length >= slotCapacity()) return { kind, index, tab, mode: "replace", hint: "Replace" };
     return { kind, index: Math.min(index, tabs.length), tab, mode: "insert", hint: "", agentTab };
@@ -3884,6 +4121,7 @@
     queueRender,
     slotCapacity,
     detachSlot,
+    slotDragActive,
     showDock,
     moveDock,
     releaseDock,
@@ -3898,6 +4136,18 @@
 
   renderSlots();
   runSplash();
+  // A window opened for a detached slot arrives: its page settles in and
+  // the bar shows its one slot for a moment.
+  if (stillWindows().some((win) => win.StillChrome?.state?.detachingUntil > Date.now())) {
+    window.requestAnimationFrame(() => {
+      if (animationsAllowed()) {
+        gBrowser.tabpanels.animate([{ opacity: 0, transform: "scale(.965)" }, { opacity: 1, transform: "none" }],
+          { duration: 380, easing: EASE });
+      }
+      showChrome();
+      scheduleChromeHide(1500);
+    });
+  }
   applyTheme(Services.prefs.getStringPref(PREF_THEME, "system"));
   (window.SessionStore?.promiseAllWindowsRestored || Promise.resolve()).then(() => {
     state.restored = true;

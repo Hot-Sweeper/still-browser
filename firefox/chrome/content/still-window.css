@@ -308,6 +308,7 @@
   pointer-events: none;
   background: linear-gradient(to bottom, rgba(0, 0, 0, .84) 0%, rgba(0, 0, 0, .64) 28%, rgba(0, 0, 0, .38) 54%, rgba(0, 0, 0, .14) 76%, transparent 100%);
   transform: translateY(-26px);
+  will-change: transform, opacity;
   transition: opacity 260ms ease, transform 420ms var(--still-ease);
 }
 
@@ -335,6 +336,9 @@
 
 #still-chrome .slot,
 #still-chrome .top-control {
+  /* Their layers exist before the bar opens, so the first frame of the
+     entrance does not have to build them. */
+  will-change: transform, opacity;
   opacity: 0;
   background: var(--still-pill);
   border: 1px solid var(--still-line);
@@ -1561,12 +1565,55 @@
   pointer-events: none;
   transition: opacity 140ms var(--still-ease-out), scale 200ms var(--still-ease-out-strong);
 }
-#still-chrome .slot:is(.drop-load, .drop-new, .drop-replace, .detach-ready) .slot-drop-hint { opacity: 1; scale: 1; }
-/* Pulled down out of the bar: it is about to leave for its own window. */
-#still-chrome .slot.detach-ready .slot-surface { border-color: rgba(var(--still-agent-rgb), .85); }
-/* One surface only: the hint is the slot's label, not a box inside it. */
-#still-chrome .slot.detach-ready .slot-drop-hint { inset: 0; background: none; }
-#still-chrome .slot.detach-ready :is(.slot-icon, .slot-title, .slot-close) { opacity: 0; transition: opacity 120ms var(--still-ease-out); }
+#still-chrome .slot:is(.drop-load, .drop-new, .drop-replace) .slot-drop-hint { opacity: 1; scale: 1; }
+
+/* Torn off the row: it rides the pointer, a little larger, casting a
+   deeper shadow. Let go, it becomes its own window. */
+#still-chrome .slot.torn { z-index: 4; }
+#still-chrome .slot.torn .slot-surface {
+  scale: 1.06;
+  box-shadow: 0 22px 48px rgba(0, 0, 0, .45), 0 4px 12px rgba(0, 0, 0, .25);
+}
+/* The pointer is over another window: the slot is with it there. */
+#still-chrome .slot.away { opacity: .35; transition: opacity 160ms var(--still-ease-out); }
+
+#still-drag-catcher {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+#still-drag-catcher[hidden] { display: none; }
+
+/* A slot from another window, following the pointer here. */
+.still-slot-float {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 70;
+  height: var(--still-toolbar-height, 43px);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border-radius: 14px;
+  color: var(--still-text);
+  background: var(--still-slot-lifted);
+  border: 1px solid var(--still-slot-lifted-edge);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, .45), 0 4px 12px rgba(0, 0, 0, .25);
+  opacity: 0;
+  scale: .9;
+  pointer-events: none;
+  will-change: translate;
+  transition: opacity 140ms var(--still-ease-out), scale 220ms var(--still-ease-out-strong);
+}
+.still-slot-float.visible { opacity: 1; scale: 1.04; }
+.still-slot-float .slot-title-plain {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
 #still-chrome .slot.empty:is(.drop-load, .drop-new),
 #still-chrome .slot:is(.drop-load, .drop-new) .slot-surface {
   border-color: rgba(var(--still-agent-rgb), .85);
@@ -1604,6 +1651,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   #still-chrome .slot.lifted .slot-surface { scale: 1; }
+  #still-chrome .slot.torn .slot-surface { scale: 1; }
+  .still-slot-float.visible { scale: 1; }
   #still-chrome .slot-drop-hint,
   .still-slot-ghost { scale: 1; transition: opacity 150ms var(--still-ease-out); }
 }
