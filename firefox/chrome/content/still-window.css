@@ -327,7 +327,8 @@
   flex: 1 1 0;
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* Five, or fewer when slots live in other Still windows. */
+  grid-template-columns: repeat(var(--slot-cells, 5), minmax(0, 1fr));
   gap: var(--still-toolbar-gap);
   pointer-events: none;
 }
@@ -1216,6 +1217,7 @@
   --lit: calc(var(--soul-d) * var(--soul-d) * (3 - 2 * var(--soul-d)));
 }
 
+/* Inside .slot-surface, so it scales and leans with it. */
 #still-chrome .slot-light {
   position: absolute;
   inset: -1px;
@@ -1559,7 +1561,12 @@
   pointer-events: none;
   transition: opacity 140ms var(--still-ease-out), scale 200ms var(--still-ease-out-strong);
 }
-#still-chrome .slot:is(.drop-load, .drop-new, .drop-replace) .slot-drop-hint { opacity: 1; scale: 1; }
+#still-chrome .slot:is(.drop-load, .drop-new, .drop-replace, .detach-ready) .slot-drop-hint { opacity: 1; scale: 1; }
+/* Pulled down out of the bar: it is about to leave for its own window. */
+#still-chrome .slot.detach-ready .slot-surface { border-color: rgba(var(--still-agent-rgb), .85); }
+/* One surface only: the hint is the slot's label, not a box inside it. */
+#still-chrome .slot.detach-ready .slot-drop-hint { inset: 0; background: none; }
+#still-chrome .slot.detach-ready :is(.slot-icon, .slot-title, .slot-close) { opacity: 0; transition: opacity 120ms var(--still-ease-out); }
 #still-chrome .slot.empty:is(.drop-load, .drop-new),
 #still-chrome .slot:is(.drop-load, .drop-new) .slot-surface {
   border-color: rgba(var(--still-agent-rgb), .85);
