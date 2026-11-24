@@ -1503,21 +1503,33 @@
   position: absolute;
   inset: 0 0 auto 0;
   height: 2px;
+  overflow: hidden;
   opacity: 0;
   pointer-events: none;
+  transition: opacity 420ms var(--still-ease-out);
+}
+/* The pattern is one tile wider than the window and slides on the
+   compositor, so the light never repaints the page. */
+#still-agent-edge::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -520px;
+  width: calc(100% + 520px);
   background-image: linear-gradient(90deg, transparent, rgba(var(--still-shine-rgb), .9) 45%, rgba(var(--still-aura-rgb), .95) 55%, transparent);
   background-size: 520px 2px;
   background-repeat: repeat-x;
-  transition: opacity 420ms var(--still-ease-out);
+  will-change: transform;
 }
 #still-layer.agent-acting #still-agent-edge {
   opacity: 1;
   transition-duration: 180ms;
+}
+#still-layer.agent-acting #still-agent-edge::before {
   animation: still-agent-edge 1.6s linear infinite;
 }
 @keyframes still-agent-edge {
-  from { background-position: 0 0; }
-  to { background-position: 520px 0; }
+  from { transform: translateX(0); }
+  to { transform: translateX(520px); }
 }
 
 /* A slot the agent is working in, while you look at another one. */
@@ -1527,7 +1539,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .agent-mark { animation: none; }
-  #still-layer.agent-acting #still-agent-edge { animation: none; }
+  #still-layer.agent-acting #still-agent-edge::before { animation: none; }
 }
 
 /* ------------------------------------------------------------ reordering
@@ -1693,8 +1705,16 @@
 }
 .agent-chip.working::after { opacity: 1; scale: 1; }
 .agent-chip-more {
-  margin-right: 4px;
+  height: 18px;
+  min-width: 22px;
+  display: grid;
+  place-items: center;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--still-text) 9%, transparent);
   color: var(--still-muted);
+  line-height: 1;
   font-size: 11px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;

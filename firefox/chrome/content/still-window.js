@@ -132,6 +132,11 @@
     return Math.max(0, SLOT_COUNT - otherSlotCount());
   }
 
+  // A window opened for a detached slot, while the main window is open.
+  function holdsDetached() {
+    return Boolean(state.detached) && stillWindows().length > 0;
+  }
+
   // The other windows redraw their rows when this one gains or loses a slot.
   function notifyPeers() {
     for (const win of stillWindows()) win.StillChrome.queueRender?.();
@@ -395,7 +400,7 @@
       const bounds = element.getBoundingClientRect();
       const center = bounds.left + bounds.width / 2;
       const distance = Math.abs(center - cursorX);
-      element.style.setProperty("--enter-delay", `${Math.min(190, Math.round(distance / 4.4))}ms`);
+      element.style.setProperty("--enter-delay", `${Math.min(90, Math.round(distance / 9))}ms`);
       element.style.setProperty("--entry-x", `${Math.max(-18, Math.min(18, (cursorX - center) / 24))}px`);
     }
     const opening = !chrome.classList.contains("open");
@@ -441,15 +446,19 @@
 
   // Like the Electron build: watch the cursor itself. The top few pixels of
   // a window belong to Windows' resize border, so a hover zone alone misses.
-  // Polling is a single cheap system call every 40 ms.
-  state.revealTimer = setInterval(() => {
-    if (document.hidden || state.starting) return;
+  // Far from the top a single cheap system call every 40 ms is enough. Once
+  // the cursor comes near, it is read every frame instead, so the bar
+  // starts on the very frame the cursor arrives and the frame clock is
+  // already running when it does.
+  let nearFrame = 0;
+  function pollReveal() {
+    if (document.hidden || state.starting) return false;
     const cursor = lazy.StillShared.cursorInWindow(window);
-    if (!cursor) return;
+    if (!cursor) return false;
     const scale = window.devicePixelRatio || 1;
     const fromTop = cursor.y / scale;
-    const inside = cursor.x >= 0 && cursor.x < cursor.width && fromTop >= -2
-      && fromTop <= (revealOpen ? 81 : 18);
+    const across = cursor.x >= 0 && cursor.x < cursor.width;
+    const inside = across && fromTop >= -2 && fromTop <= (revealOpen ? 81 : 18);
     if (inside && !revealOpen) {
       revealOpen = true;
       showChrome(cursor.x / cursor.width);
@@ -457,6 +466,14 @@
       revealOpen = false;
       if (!chromeBusy()) scheduleChromeHide();
     }
+    return across && fromTop >= -2 && fromTop <= 160;
+  }
+  function nearLoop() {
+    nearFrame = pollReveal() ? window.requestAnimationFrame(nearLoop) : 0;
+  }
+  state.revealTimer = setInterval(() => {
+    if (nearFrame) return;
+    if (pollReveal()) nearFrame = window.requestAnimationFrame(nearLoop);
   }, 40);
   window.addEventListener("unload", () => clearInterval(state.revealTimer));
   chrome.addEventListener("mouseenter", () => clearTimeout(state.hideTimer));
@@ -617,7 +634,9 @@
     state.renderQueued = false;
     const tabs = slotTabs();
     const nodes = [];
-    const cells = Math.max(1, tabs.length, slotCapacity());
+    // Empty slots wait only in the main window. A window that holds a
+    // detached slot shows just its own slots while the main one is open.
+    const cells = holdsDetached() ? Math.max(1, tabs.length) : Math.max(1, tabs.length, slotCapacity());
     slotRow.style.setProperty("--slot-cells", String(cells));
     for (let index = 0; index < cells; index++) {
       const tab = tabs[index];
@@ -1902,7 +1921,7 @@
     peekChrome();
     const current = Math.max(0, tabs.indexOf(gBrowser.selectedTab));
     if (direction > 0 && current === tabs.length - 1) {
-      if (tabs.length < slotCapacity()) armNewSlotEdge();
+      if (tabs.length < slotCapacity() && !holdsDetached()) armNewSlotEdge();
       else bumpWall("right");
       return;
     }
@@ -3238,7 +3257,7 @@
         }
         return chip;
       });
-      if (tabs.length > shown.length) nodes.unshift(h("span", { class: "agent-chip-more", text: `+${tabs.length - shown.length}` }));
+      if (tabs.length > shown.length) nodes.push(h("span", { class: "agent-chip-more", text: `+${tabs.length - shown.length}` }));
       agentChips.replaceChildren(...nodes);
       agentChips.dataset.key = key;
       agentButton.classList.toggle("has-tabs", tabs.length > 0);
@@ -4139,6 +4158,8 @@
   // A window opened for a detached slot arrives: its page settles in and
   // the bar shows its one slot for a moment.
   if (stillWindows().some((win) => win.StillChrome?.state?.detachingUntil > Date.now())) {
+    state.detached = true;
+    queueRender();
     window.requestAnimationFrame(() => {
       if (animationsAllowed()) {
         gBrowser.tabpanels.animate([{ opacity: 0, transform: "scale(.965)" }, { opacity: 1, transform: "none" }],
