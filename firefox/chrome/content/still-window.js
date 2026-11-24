@@ -3644,7 +3644,7 @@
       bar.style.setProperty("--heat", heat(i));
       bars.append(bar);
     }
-    const paint = (i, animate = false) => {
+    const paint = (i) => {
       preview = i;
       const item = values[i];
       name.textContent = item.name.replace(/^Default.*$/i, "Auto");
@@ -3653,12 +3653,10 @@
       bars.setAttribute("aria-valuenow", String(i));
       bars.setAttribute("aria-valuetext", item.name);
       bars.style.setProperty("--glow", heat(i));
+      // Only color changes (a short fade in CSS): no motion, so dragging
+      // back and forth stays calm.
       [...bars.children].forEach((bar, n) => {
-        const lit = n <= i;
-        if (animate && lit !== bar.classList.contains("lit") && animationsAllowed()) {
-          bar.animate([{ scale: "1 .6" }, { scale: "1 1.08" }, { scale: "1 1" }], { duration: 300, delay: Math.abs(n - index) * 18, easing: "cubic-bezier(.23, 1, .32, 1)" });
-        }
-        bar.classList.toggle("lit", lit);
+        bar.classList.toggle("lit", n <= i);
         bar.classList.toggle("top", n === i);
       });
     };
@@ -3675,10 +3673,10 @@
     bars.addEventListener("pointerdown", (event) => {
       dragging = true;
       bars.setPointerCapture(event.pointerId);
-      paint(at(event), true);
+      paint(at(event));
     });
     bars.addEventListener("pointermove", (event) => {
-      if (dragging) { const i = at(event); if (i !== preview) paint(i, true); }
+      if (dragging) { const i = at(event); if (i !== preview) paint(i); }
     });
     const end = () => { if (!dragging) return; dragging = false; commit(); };
     bars.addEventListener("pointerup", end);
@@ -3688,7 +3686,7 @@
       const jump = event.key === "Home" ? 0 : event.key === "End" ? count - 1 : null;
       if (step === undefined && jump === null) return;
       event.preventDefault();
-      paint(jump ?? Math.max(0, Math.min(count - 1, preview + step)), true);
+      paint(jump ?? Math.max(0, Math.min(count - 1, preview + step)));
       commit();
     });
     paint(index);

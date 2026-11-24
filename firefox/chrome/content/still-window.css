@@ -2477,7 +2477,7 @@
   border-radius: 4px;
   background: color-mix(in srgb, var(--still-text) 11%, transparent);
   transform-origin: 50% 100%;
-  transition: background-color 180ms var(--still-ease-out), box-shadow 220ms var(--still-ease-out);
+  transition: background-color 90ms linear, box-shadow 120ms linear;
 }
 .effort-bars:hover .effort-bar:not(.lit) { background: color-mix(in srgb, var(--still-text) 16%, transparent); }
 .effort-bar.lit { background: var(--heat); }
@@ -2568,3 +2568,7 @@
 #still-layer .logo-add.active { color: var(--still-text); }
 #still-layer .logo-add.active svg { opacity: 1; scale: 1.3; rotate: 0deg; }
 #still-layer .logo-add svg { transition: opacity 160ms var(--still-ease-out), rotate 240ms var(--still-ease-out-strong), scale 320ms var(--still-ease-spring); }
+
+/* OLED: switches that are on use a deep, saturated green on the black,
+   not the pastel one of the dark theme. */
+:root[still-theme="oled"] #still-layer :is(.settings-row, .agent-gallery-switch)[aria-checked="true"] .agent-switch { background: #1fa35c; }
