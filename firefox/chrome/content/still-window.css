@@ -1992,13 +1992,14 @@
 #still-settings[hidden] { display: none; }
 #still-settings:focus { outline: none; }
 #still-agent-gallery.dragging { opacity: .55; }
+/* Starts under the bar, so nothing scrolls behind the slots. */
 .agent-gallery-scroll {
   position: absolute;
-  inset: 0;
+  inset: 70px 0 0;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  padding: 92px max(28px, calc((100% - 1640px) / 2)) 48px;
+  padding: 22px max(28px, calc((100% - 1640px) / 2)) 48px;
 }
 .agent-gallery-head {
   display: flex;
@@ -2205,13 +2206,21 @@
 #still-chrome .agent-working .agents-mode-icon .agent-orbit { opacity: 1; fill: rgb(var(--still-agent-rgb)); }
 
 /* --------------------------------------------------------------- settings
-   One column of plain rows grouped under small headings; switches apply at
-   once. Shares the agent gallery's page, header and close button. */
-.settings-body { display: grid; gap: 30px; max-width: 720px; padding-bottom: 24px; }
+   A centered column of grouped rows: switches, choices, editable endpoints
+   and plain facts about how each feature works. Shares the agent gallery's
+   page, header and close button. */
+.settings-column { width: min(760px, 100%); margin: 0 auto; }
+.settings-body { display: grid; gap: 34px; padding-bottom: 40px; }
 .settings-section { display: grid; gap: 8px; }
-#still-layer .settings-section h3 { margin: 0 0 2px; color: var(--still-muted); font-size: 13px; font-weight: 650; }
-.settings-note { margin: 0 0 6px; color: var(--still-muted); font-size: 13px; line-height: 1.45; }
-.settings-rows { display: grid; gap: 2px; }
+#still-layer .settings-section h3 { margin: 0; padding: 0 4px; font-size: 15px; font-weight: 650; }
+.settings-note { margin: 0 0 4px; padding: 0 4px; color: var(--still-muted); font-size: 13px; line-height: 1.45; }
+.settings-rows {
+  display: grid;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--still-text) 4%, transparent);
+  border-radius: 12px;
+}
+.settings-rows > * + * { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--still-text) 7%, transparent); }
 #still-layer .settings-row {
   width: 100%;
   min-height: 52px;
@@ -2219,13 +2228,13 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  padding: 8px 12px;
+  padding: 9px 14px;
   color: var(--still-text);
   font: inherit;
   text-align: start;
   background: transparent;
   border: 0;
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   transition: background-color 120ms var(--still-ease-out);
 }
@@ -2271,4 +2280,58 @@
   color: var(--still-text);
   background: var(--still-pill-strong);
   box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+}
+#still-layer .settings-row:is(.info, .field-row) { cursor: default; }
+#still-layer .settings-row:is(.info, .field-row):hover { background: transparent; }
+.settings-value-wrap { min-width: 0; display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.settings-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--still-muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-value.mono {
+  max-width: 400px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: end;
+  padding: 3px 8px;
+  color: var(--still-text);
+  font: 12px/1.4 ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  background: color-mix(in srgb, var(--still-text) 7%, transparent);
+  border-radius: 6px;
+}
+#still-layer .settings-mini {
+  height: 26px;
+  padding: 0 10px;
+  color: var(--still-text);
+  font: inherit;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--still-text) 8%, transparent);
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+#still-layer .settings-mini:hover { background: color-mix(in srgb, var(--still-text) 14%, transparent); }
+#still-layer .settings-field {
+  width: min(360px, 48vw);
+  height: 34px;
+  padding: 0 11px;
+  color: var(--still-text);
+  font: 12.5px/1 ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  background: color-mix(in srgb, var(--still-text) 7%, transparent);
+  border: 0;
+  border-radius: 8px;
+  outline: none;
+  transition: box-shadow 120ms var(--still-ease-out);
+}
+#still-layer .settings-field::placeholder { color: var(--still-muted); }
+#still-layer .settings-field:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--still-accent) 60%, transparent); }
+#still-layer .settings-field[aria-invalid="true"] { box-shadow: 0 0 0 2px #c84646; }
+@media (max-width: 720px) {
+  #still-layer .settings-row:is(.info, .field-row, .segmented-row) { grid-template-columns: minmax(0, 1fr); }
+  .settings-value-wrap { justify-content: flex-start; }
+  #still-layer .settings-field { width: 100%; }
 }

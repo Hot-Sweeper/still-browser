@@ -3390,11 +3390,12 @@
   const settingsPage = h("section", { id: "still-settings", class: "still-page", hidden: true, role: "dialog", "aria-label": "Settings", tabindex: "-1" });
   const settingsBody = h("div", { class: "settings-body" });
   const settingsClose = h("button", { type: "button", class: "agent-gallery-close", title: "Close (Esc)", "aria-label": "Close settings" }, closeGlyph());
-  settingsPage.append(h("div", { class: "agent-gallery-scroll" },
+  settingsPage.append(h("div", { class: "agent-gallery-scroll" }, h("div", { class: "settings-column" },
     h("header", { class: "agent-gallery-head" },
-      h("div", { class: "agent-gallery-heading" }, h("h2", { class: "agent-gallery-title", text: "Settings" })),
+      h("div", { class: "agent-gallery-heading" }, h("h2", { class: "agent-gallery-title", text: "Settings" }),
+        h("p", { class: "agent-gallery-status", text: "Changes apply at once." })),
       h("div", { class: "agent-gallery-actions" }, settingsClose)),
-    settingsBody));
+    settingsBody)));
   chrome.before(settingsPage);
 
   const MODE_NOTES = {
@@ -3422,8 +3423,10 @@
     return row;
   }
 
-  function settingsSection(title, ...rows) {
-    return h("section", { class: "settings-section" }, h("h3", { text: title }), h("div", { class: "settings-rows" }, ...rows.filter(Boolean)));
+  function settingsSection(title, note, ...rows) {
+    return h("section", { class: "settings-section" }, h("h3", { text: title }),
+      note ? h("p", { class: "settings-note", text: note }) : null,
+      h("div", { class: "settings-rows" }, ...rows.filter(Boolean)));
   }
 
   function settingAction(label, note, onClick) {
@@ -3453,56 +3456,142 @@
     return row;
   }
 
+  // A fact about how a feature works: a label and its value, often a
+  // command or address in monospace, with an optional copy button.
+  function settingInfo(label, value, { mono = false, copy = false, note = "" } = {}) {
+    const valueNode = h("span", { class: `settings-value${mono ? " mono" : ""}`, text: value });
+    const row = h("div", { class: "settings-row info" },
+      h("span", { class: "settings-copy" }, h("strong", { text: label }), note ? h("small", { text: note }) : null),
+      h("span", { class: "settings-value-wrap" }, valueNode));
+    if (copy) {
+      const button = h("button", { type: "button", class: "settings-mini", text: "Copy" });
+      button.addEventListener("click", () => {
+        try { Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString(value); } catch {}
+        button.textContent = "Copied";
+        setTimeout(() => { button.textContent = "Copy"; }, 1400);
+      });
+      row.querySelector(".settings-value-wrap").append(button);
+    }
+    row.stillValue = valueNode;
+    return row;
+  }
+
+  function hostOfUrl(url) {
+    try { return new URL(url).host; } catch { return url; }
+  }
+
+  // Ask the summary endpoint for one token: proves it answers and names the
+  // model behind it, with how long the answer took.
+  async function checkSummaryModel(endpoint) {
+    const started = performance.now();
+    const response = await fetch(new URL("v1/chat/completions", endpoint), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-GridAPI-Project": "Still", "X-GridAPI-Title": "Settings check" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Reply with OK." }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) throw new Error(`error ${response.status}`);
+    const data = await response.json();
+    return { model: data.model || "unknown model", seconds: (performance.now() - started) / 1000 };
+  }
+
   async function renderSettings() {
     const theme = Services.prefs.getStringPref(PREF_THEME, "system");
     const themeRow = h("div", { class: "settings-row segmented-row" },
       h("span", { class: "settings-copy" }, h("strong", { text: "Theme" })),
-      h("div", { class: "settings-segmented", role: "radiogroup", "aria-label": "Theme" },
-        ...themes.map((name) => {
-          const option = h("button", { type: "button", role: "radio", "aria-checked": String(name === theme),
-            text: { system: "System", light: "Light", dark: "Dark", oled: "OLED" }[name] });
-          option.addEventListener("click", () => {
-            Services.prefs.setStringPref(PREF_THEME, name);
-            applyTheme(name);
-            for (const other of option.parentNode.children) other.setAttribute("aria-checked", String(other === option));
-          });
-          return option;
-        })));
+      segmented("Theme", themes.map((name) => [name, { system: "System", light: "Light", dark: "Dark", oled: "OLED" }[name]]), theme, (name) => {
+        Services.prefs.setStringPref(PREF_THEME, name);
+        applyTheme(name);
+      }));
+
+    // Search: SearXNG locally, summaries from GridAPI (or another endpoint).
     const aiChoice = Services.prefs.getStringPref("still.search.ai", "").trim();
-    let server = "";
-    try { server = await lazy.StillShared.gridApiServer(); } catch {}
+    let detected = "";
+    try { detected = await lazy.StillShared.gridApiServer(); } catch {}
     const custom = /^https?:\/\//.test(aiChoice) ? aiChoice : "";
-    const where = custom || server;
-    const host = where ? (() => { try { return new URL(where).host; } catch { return where; } })() : "";
-    const summaries = settingSwitch("Summaries", where
-      ? `A short answer above results, written by your GridAPI (${host})`
-      : "Needs GridUI Desktop signed in to your GridAPI, or an address in still.search.ai",
-      aiChoice !== "off" && Boolean(where), (on) => {
+    const endpoint = custom || detected;
+    const modelRow = settingInfo("Model", endpoint ? "Checking…" : "No endpoint", { mono: true, note: "What writes the summaries, and how fast it answered" });
+    const runCheck = (url) => {
+      if (!url) { modelRow.stillValue.textContent = "No endpoint"; return; }
+      modelRow.stillValue.textContent = "Checking…";
+      checkSummaryModel(url).then(
+        ({ model, seconds }) => { modelRow.stillValue.textContent = `${model} · ${seconds.toFixed(1)} s`; },
+        (error) => { modelRow.stillValue.textContent = `Not answering (${error.message || error})`; });
+    };
+    const summaries = settingSwitch("Summaries", "A short answer above the results, with the asked-for fact in bold and its sources",
+      aiChoice !== "off" && Boolean(endpoint), (on) => {
         Services.prefs.setStringPref("still.search.ai", on ? custom : "off");
         lazy.StillShared.refreshSearchConfig?.().catch(console.error);
       });
-    if (!where) summaries.disabled = true;
+    if (!endpoint) summaries.disabled = true;
+    const field = h("input", { class: "settings-field", type: "url", spellcheck: "false", value: custom,
+      placeholder: detected || "https://your-server/", "aria-label": "Summary endpoint" });
+    const saveEndpoint = () => {
+      const value = field.value.trim();
+      if (value && !/^https?:\/\//.test(value)) { field.setAttribute("aria-invalid", "true"); return; }
+      field.removeAttribute("aria-invalid");
+      if (value === custom && field.dataset.saved) return;
+      field.dataset.saved = "1";
+      if (aiChoice !== "off" || value) Services.prefs.setStringPref("still.search.ai", value);
+      lazy.StillShared.refreshSearchConfig?.().catch(console.error);
+      runCheck(value || detected);
+    };
+    field.addEventListener("change", saveEndpoint);
+    field.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); field.blur(); } });
+    const endpointRow = h("label", { class: "settings-row field-row" },
+      h("span", { class: "settings-copy" }, h("strong", { text: "Endpoint" }),
+        h("small", { text: "Any OpenAI-style server. Empty uses the GridAPI GridUI Desktop is signed in to." })),
+      field);
+    if (aiChoice !== "off") runCheck(endpoint);
+
+    // Side chat: which agent answers, and how Still talks to it.
+    let agents = [];
+    try { agents = ChromeUtils.importESModule("resource://still/StillChat.sys.mjs").StillChat.chatAgents(); } catch {}
+    const chatId = Services.prefs.getStringPref("still.chat.agent", "codex");
+    const howRow = settingInfo("How it connects", "", { mono: true });
+    const describeChat = (id) => {
+      const agent = agents.find((candidate) => candidate.id === id) || agents[0];
+      if (!agent) return;
+      howRow.stillValue.textContent = agent.kind === "t3" ? `${agent.command || "t3"} thread · shows in T3 Code`
+        : `${[agent.command, ...(agent.args || [])].join(" ")} · Agent Client Protocol`;
+    };
+    describeChat(chatId);
+    const chatRow = h("div", { class: "settings-row segmented-row" },
+      h("span", { class: "settings-copy" }, h("strong", { text: "Agent" }), h("small", { text: "Who answers in the side chat (Ctrl+E)" })),
+      segmented("Side chat agent", agents.map((agent) => [agent.id, agent.name]), chatId, (id) => {
+        Services.prefs.setStringPref("still.chat.agent", id);
+        describeChat(id);
+      }));
+
+    // Agents: how outside agents reach Still, and who is connected.
+    const connected = [...new Set(agentState.clients)];
     const tab = gBrowser.selectedTab;
     const siteHost = (() => { try { return new URL(tabUrl(tab)).host; } catch { return ""; } })();
     settingsBody.replaceChildren(
-      settingsSection("Button", h("p", { class: "settings-note", text: "What the button beside the window controls switches between. Scroll on it to switch, click to open." }),
+      settingsSection("Button", "What the button beside the window controls switches between. Scroll on it to switch, click to open.",
         ...utilityModes.map(buttonModeRow)),
-      settingsSection("Appearance", themeRow),
-      settingsSection("Search", summaries),
-      settingsSection("Agents",
-        settingSwitch("Let agents use Still", "Agents like Claude Code and Codex can open and use tabs with your sign-ins",
-          Services.prefs.getBoolPref("still.agent.enabled", true), (on) => {
-            Services.prefs.setBoolPref("still.agent.enabled", on);
-            if (!on) lazy.StillAgent.disconnectAll().catch(console.error);
-          }),
+      settingsSection("Appearance", "", themeRow),
+      settingsSection("Search", "Results come from a private SearXNG on this computer; summaries from the endpoint below.",
+        settingInfo("Results", "SearXNG · 127.0.0.1:48230", { mono: true, note: "Searches never leave through a search company's account" }),
+        summaries, endpointRow, modelRow),
+      settingsSection("Side chat", "An agent beside the page that can read and use it, with Still's tools.",
+        chatRow, howRow),
+      settingsSection("Agents", "Coding agents use Still through its MCP server, with your sign-ins, in hidden tabs of their own.",
+        settingSwitch("Let agents use Still", "Turning this off disconnects every agent", Services.prefs.getBoolPref("still.agent.enabled", true), (on) => {
+          Services.prefs.setBoolPref("still.agent.enabled", on);
+          if (!on) lazy.StillAgent.disconnectAll().catch(console.error);
+        }),
+        settingInfo("Connect an agent", "still mcp", { mono: true, copy: true, note: "Add this command as an MCP server in Claude Code, Codex or T3" }),
+        settingInfo("Connected now", connected.length ? new Intl.ListFormat("en").format(connected) : "None"),
         settingSwitch("Live view", "A small live picture when an agent works in a tab you are not looking at",
-          agentViewEnabled(), (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); })),
-      settingsSection("Slots",
+          agentViewEnabled(), (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); }),
+        settingInfo("Tidying up", "After 15 min unused", { note: "Agent tabs close on their own, and when their agent disconnects" })),
+      settingsSection("Slots", "",
         settingSwitch("Dock slide", "Pages slide when you switch slots from the dock", dockSlideEnabled(), (on) => {
           Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on);
           renderUtilityButton();
         })),
-      settingsSection("Sites and imports",
+      settingsSection("Sites and imports", "",
         siteHost ? settingAction(`Permissions for ${siteHost}`, "Camera, microphone, location, notifications", () => { hideSettings(); renderPermissions(); }) : null,
         settingAction("Import sign-ins from Opera GX", "Close Opera GX first", () => { hideSettings(); runImport("opera"); }),
         settingAction("Import history from Opera GX", "Pages and site icons, so suggestions know your sites", () => { hideSettings(); runHistoryImport(); }),
@@ -3510,6 +3599,19 @@
           hideSettings();
           try { lazy.MigrationUtils.showMigrationWizard(window, {}); } catch { showToast("Could not open the import window."); }
         })));
+  }
+
+  function segmented(label, options, value, onChange) {
+    const group = h("div", { class: "settings-segmented", role: "radiogroup", "aria-label": label });
+    for (const [id, text] of options) {
+      const option = h("button", { type: "button", role: "radio", "aria-checked": String(id === value), text });
+      option.addEventListener("click", () => {
+        for (const other of group.children) other.setAttribute("aria-checked", String(other === option));
+        onChange(id);
+      });
+      group.append(option);
+    }
+    return group;
   }
 
   const settingsState = { opener: null };
