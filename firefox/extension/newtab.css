@@ -752,8 +752,9 @@ html[data-category="images"] .results-layout { margin-left: 0; }
    fact in bold, each claim backed by its sources' icons, and a small
    Follow up button that opens a field in place. */
 .summary {
+  position: relative;
   margin: 0 0 18px;
-  padding: 14px 18px 12px;
+  padding: 14px 18px 13px;
   background: var(--field);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -826,12 +827,21 @@ html[data-category="images"] .results-layout { margin-left: 0; }
 .summary-wait i:nth-child(3) { animation-delay: .32s; }
 @keyframes still-summary-wait { from { opacity: .25; } to { opacity: .9; } }
 
+/* Follow up sits in the bottom right corner, on the answer's last line; a
+   gap at the end of that line keeps the text from running under it. */
+.summary:has(.summary-follow:not([hidden])) .summary-turn:last-child .summary-text::after {
+  content: "";
+  display: inline-block;
+  width: 104px;
+}
 .summary-follow {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 28px;
-  margin: 10px 0 0 -8px;
   padding: 0 10px 0 8px;
   color: var(--muted);
   font: inherit;
