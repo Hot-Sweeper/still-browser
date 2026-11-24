@@ -2595,3 +2595,7 @@
 #still-layer .icon-select-more-chevron { width: 14px; height: 14px; transition: rotate 200ms var(--still-ease-out-strong); }
 #still-layer .icon-select-more[aria-expanded="true"] .icon-select-more-chevron { rotate: 180deg; }
 #still-layer .icon-select-option.older .icon-select-name { font-weight: 500; color: color-mix(in srgb, var(--still-text) 75%, var(--still-muted)); }
+
+/* A sleeping slot (its page unloaded to save memory): its icon rests
+   faded until you open it. */
+#still-chrome .slot.sleeping .slot-icon { opacity: .5; filter: grayscale(.6); }

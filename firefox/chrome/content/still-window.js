@@ -639,6 +639,7 @@
     pill.classList.toggle("loading", tab.hasAttribute("busy") || tab.stillDownload?.kind === "running");
     pill.classList.toggle("muted", tab.hasAttribute("muted"));
     pill.classList.toggle("playing", tab.hasAttribute("soundplaying"));
+    pill.classList.toggle("sleeping", tab.hasAttribute("pending") && !active);
     pill.setAttribute("aria-pressed", String(active));
     const title = slotTitle(tab);
     const label = `Slot ${index + 1}: ${title}`;
@@ -3137,6 +3138,56 @@
   }
 
   // Every minute: hidden agent tabs nobody has used for a while close.
+  // Sleeping slots: a slot you have not looked at for a while (30 minutes
+  // by default) gives its memory back and reloads when you open it again,
+  // like Firefox's own tab unloading but on a timer. Never a slot playing
+  // sound, with unsaved input on its page, sharing camera, microphone or
+  // screen, or one an agent is working in.
+  const PREF_SLEEP = "still.slots.sleep";
+  const PREF_SLEEP_MINUTES = "still.slots.sleepAfterMinutes";
+  const seenAt = new WeakMap();
+  const markSeen = (tab) => { if (tab) seenAt.set(tab, Date.now()); };
+  markSeen(gBrowser.selectedTab);
+  let lastSelected = gBrowser.selectedTab;
+  gBrowser.tabContainer.addEventListener("TabSelect", () => {
+    markSeen(lastSelected);
+    lastSelected = gBrowser.selectedTab;
+    markSeen(lastSelected);
+  });
+  gBrowser.tabContainer.addEventListener("TabAttrModified", (event) => {
+    if (event.detail?.changed?.includes("pending")) queueRender();
+  });
+  // Many sites keep a "leave this page?" handler around even with nothing
+  // to lose (GitHub, Reddit). The page is asked, without any prompt,
+  // whether it would warn right now; only then does its slot stay awake.
+  async function wouldWarn(tab) {
+    const browser = tab.linkedBrowser;
+    if (!browser?.hasBeforeUnload) return false;
+    try {
+      const global = browser.browsingContext?.currentWindowGlobal;
+      return global ? !(await global.permitUnload("dontUnload", 1500)) : true;
+    } catch { return true; }
+  }
+
+  async function sleepSlots() {
+    if (!Services.prefs.getBoolPref(PREF_SLEEP, true)) return;
+    const after = Math.max(1, Services.prefs.getIntPref(PREF_SLEEP_MINUTES, 30)) * 60 * 1000;
+    const busy = agentWorkingTab();
+    let slept = false;
+    for (const tab of slotTabs()) {
+      if (tab.selected || tab.hasAttribute("pending") || tab.hasAttribute("soundplaying") || tab.stillDownload || tab === busy) continue;
+      if (tab._sharingState?.webRTC || tab._sharingState?.sharing) continue;
+      if (!seenAt.has(tab)) { markSeen(tab); continue; }
+      if (Date.now() - seenAt.get(tab) < after) continue;
+      if (await wouldWarn(tab)) continue;
+      if (tab.closing || tab.selected) continue;
+      try { gBrowser.discardBrowser(tab, true); slept = true; } catch (error) { console.error(error); }
+    }
+    if (slept) queueRender();
+  }
+  state.sleepTimer = setInterval(sleepSlots, 60 * 1000);
+  window.addEventListener("unload", () => clearInterval(state.sleepTimer));
+
   state.agentSweep = setInterval(() => {
     const now = Date.now();
     closeAgentTabs(agentTabs().filter((tab) => now - (tab.stillAgentUsed || now) > AGENT_TAB_IDLE_MS));
@@ -4054,6 +4105,8 @@
     const tab = gBrowser.selectedTab;
     const siteHost = (() => { try { return new URL(tabUrl(tab)).host; } catch { return ""; } })();
     const more = h("div", { class: "settings-rows", hidden: true },
+      settingSwitch("Sleep unused slots", "Slots you have not opened for 30 minutes free their memory and reload when you open them",
+        Services.prefs.getBoolPref("still.slots.sleep", true), (on) => Services.prefs.setBoolPref("still.slots.sleep", on)),
       settingSwitch("Dock slide", "", dockSlideEnabled(), (on) => { Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on); renderUtilityButton(); }),
       siteHost ? settingAction(`Permissions for ${siteHost}`, "", () => { hideSettings(); renderPermissions(); }) : null,
       settingAction("Import from Opera GX", "", () => { hideSettings(); runImport("opera"); }),
