@@ -349,6 +349,7 @@
   transition:
     transform 430ms var(--still-ease),
     opacity 210ms ease,
+    color 170ms ease,
     background 170ms ease,
     border-color 170ms ease,
     box-shadow 170ms ease;
@@ -1801,8 +1802,6 @@
   background: none;
   border: 1px dashed rgba(255, 255, 255, .12);
   box-shadow: none;
-  transition: color 150ms var(--still-ease-out), background-color 150ms var(--still-ease-out),
-    border-color 150ms var(--still-ease-out);
 }
 #still-chrome .slot.empty:is(:hover, :focus-visible) {
   color: rgba(255, 255, 255, .75);
@@ -2565,3 +2564,7 @@
 #still-layer .icon-select-check { width: 16px; height: 16px; flex: 0 0 16px; color: var(--still-text); stroke-width: 2.2; opacity: 0; }
 #still-layer .icon-select-option[aria-selected="true"] .icon-select-check { opacity: 1; }
 #still-layer .icon-select-option[aria-selected="true"] .icon-select-name { font-weight: 650; }
+/* "+" while its form is open: marked like a chosen logo. */
+#still-layer .logo-add.active { color: var(--still-text); }
+#still-layer .logo-add.active svg { opacity: 1; scale: 1.3; rotate: 0deg; }
+#still-layer .logo-add svg { transition: opacity 160ms var(--still-ease-out), rotate 240ms var(--still-ease-out-strong), scale 320ms var(--still-ease-spring); }

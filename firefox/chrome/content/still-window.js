@@ -3501,15 +3501,18 @@
     const wrap = h("div", { class: `logo-picker${small ? " small" : ""}` });
     const row = h("div", { class: "logo-row", role: "radiogroup", "aria-label": label });
     const caption = h("div", { class: "logo-caption" });
+    let chosen = value;
+    let adding = false;
+    let add = null;
     const paint = (id) => {
       const item = items.find((candidate) => candidate.id === id);
-      const label = h("span", { class: "logo-caption-inner" }, h("span", { text: item?.name || "" }));
+      const label = h("span", { class: "logo-caption-inner" }, h("span", { text: id === "__add" ? "Add your own" : item?.name || "" }));
       caption.replaceChildren(label);
       // The name glides to sit centred under the chosen logo.
       const place = () => {
-        const chosen = row.querySelector('.logo-pick[aria-checked="true"]');
-        if (!chosen || !label.isConnected) return;
-        const box = chosen.getBoundingClientRect();
+        const marked = row.querySelector('.logo-pick[aria-checked="true"], .logo-add.active');
+        if (!marked || !label.isConnected) return;
+        const box = marked.getBoundingClientRect();
         const center = box.left + box.width / 2 - caption.getBoundingClientRect().left;
         const x = Math.max(0, Math.min(center - label.offsetWidth / 2, caption.clientWidth - label.offsetWidth));
         caption.style.setProperty("--caption-x", `${Math.round(x)}px`);
@@ -3523,21 +3526,45 @@
     };
     for (const item of items) {
       const logo = item.node || (item.logo ? h("img", { src: item.logo, alt: "" }) : null);
-      const button = h("button", { type: "button", class: "logo-pick", role: "radio", "aria-checked": String(item.id === value), title: item.name, "aria-label": item.name },
+      const button = h("button", { type: "button", class: "logo-pick", role: "radio", "aria-checked": String(item.id === value), title: item.name, "aria-label": item.name, "data-id": item.id },
         logo || h("span", { class: "logo-letter", text: (item.name || "?")[0].toUpperCase() }));
       logo?.addEventListener?.("error", () => logo.replaceWith(h("span", { class: "logo-letter", text: (item.name || "?")[0].toUpperCase() })), { once: true });
       button.addEventListener("click", () => {
-        if (button.getAttribute("aria-checked") === "true") return;
+        // While adding, any logo (even the one chosen before) leaves the
+        // form and shows that choice again.
+        if (button.getAttribute("aria-checked") === "true" && !adding) return;
+        const wasAdding = adding;
+        stopAdding();
         for (const other of row.querySelectorAll(".logo-pick")) other.setAttribute("aria-checked", String(other === button));
         paint(item.id);
-        onPick?.(item.id);
+        if (item.id !== chosen || wasAdding) { chosen = item.id; onPick?.(item.id); }
       });
       row.append(button);
     }
+    function stopAdding() {
+      adding = false;
+      add?.classList.remove("active");
+      add?.setAttribute("aria-pressed", "false");
+    }
+    // "+" becomes the marked one while its form is open; Cancel (restore)
+    // puts the earlier choice back.
+    const restore = () => {
+      stopAdding();
+      for (const other of row.querySelectorAll(".logo-pick")) other.setAttribute("aria-checked", String(other.dataset.id === chosen));
+      paint(chosen);
+    };
     if (onAdd) {
-      const add = h("button", { type: "button", class: "logo-add", title: "Add your own", "aria-label": `Add your own ${label.toLowerCase()}` },
+      add = h("button", { type: "button", class: "logo-add", title: "Add your own", "aria-pressed": "false", "aria-label": `Add your own ${label.toLowerCase()}` },
         icon([["path", { d: "M12 6v12M6 12h12" }]]));
-      add.addEventListener("click", () => onAdd(add));
+      add.addEventListener("click", () => {
+        if (adding) { restore(); onPick?.(chosen); return; }
+        adding = true;
+        add.classList.add("active");
+        add.setAttribute("aria-pressed", "true");
+        for (const other of row.querySelectorAll(".logo-pick")) other.setAttribute("aria-checked", "false");
+        paint("__add");
+        onAdd(add, restore);
+      });
       row.append(add);
     }
     paint(value);
@@ -3833,7 +3860,7 @@
           applyEngine("still");
           renderSearch();
         },
-        onAdd: () => {
+        onAdd: (button, restore) => {
           searchExtra.replaceChildren(addForm([
             { label: "Search address", type: "url", placeholder: "https://example.com/search?q={q}" },
             { label: "Name", placeholder: "Name (optional)" }
@@ -3845,7 +3872,7 @@
             applyEngine(id);
             renderSearch();
             return null;
-          }, extra));
+          }, () => { restore(); extra(); }));
         }
       });
       searchBox.replaceChildren(picker, searchExtra);
@@ -3911,7 +3938,7 @@
           chat?.selectAgent("codex");
           renderChat();
         },
-        onAdd: () => {
+        onAdd: (button, restore) => {
           chatExtra.replaceChildren(addForm([
             { label: "Endpoint", type: "url", placeholder: "OpenAI-style server", value: detected },
             { label: "Name", placeholder: "Name", value: detected ? "GridAPI" : "" },
@@ -3924,7 +3951,7 @@
             chat?.selectAgent(id);
             renderChat();
             return null;
-          }, () => showChoices(Services.prefs.getStringPref("still.chat.agent", "codex"))));
+          }, () => { restore(); showChoices(Services.prefs.getStringPref("still.chat.agent", "codex")); }));
         }
       });
       chatBox.replaceChildren(picker, chatExtra);
