@@ -90,9 +90,10 @@
     return svg;
   }
 
-  const utilityModes = ["chat", "bookmarks", "history", "downloads", "permissions", "browser", "theme", "tabdock"];
+  const utilityModes = ["chat", "agents", "bookmarks", "history", "downloads", "permissions", "browser", "theme", "tabdock"];
   const utilityMeta = {
     chat: { label: "Side chat (Ctrl+E)", paths: ["M6.8 5h10.4a2.3 2.3 0 0 1 2.3 2.3v6.2a2.3 2.3 0 0 1-2.3 2.3h-5.7l-4 3.2v-3.2h-.7a2.3 2.3 0 0 1-2.3-2.3V7.3A2.3 2.3 0 0 1 6.8 5Z", "M9 9.6h6M9 12.2h3.6"] },
+    agents: { label: "Agent tabs", className: "agents-mode-icon", paths: [["path", { class: "agent-star", d: "M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z" }], ["circle", { class: "agent-orbit", cx: "18.2", cy: "5.6", r: "1.15" }]] },
     bookmarks: { label: "Bookmarks", paths: ["m12 3.7 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.5l-5.01 2.63.96-5.58L3.9 9.6l5.6-.8L12 3.7Z"] },
     history: { label: "History", paths: ["M4.5 5.8v4.4h4.4M5 10a7.5 7.5 0 1 1 .8 5.2M12 7.6V12l3.1 1.8"] },
     downloads: { label: "Downloads", paths: ["M12 3.5v11m-4-4 4 4 4-4M5 19.5h14"] },
@@ -2831,7 +2832,7 @@
     else if (theme !== "oled" && registered) sheets.unregisterSheet(OLED_SHEET, sheets.USER_SHEET);
   }
 
-  function runUtility() {
+  function runUtility(event) {
     const mode = state.utilityMode;
     if (!utilityPanel.hidden && utilityPanel.dataset.mode === mode) { hideUtilityPanel(); return; }
     hideUtilityPanel();
@@ -2840,6 +2841,7 @@
       if (!utilityPanel.hidden) utilityPanel.append(emptyNote(`Could not load ${what}. Close this panel and try again.`));
     };
     if (mode === "chat") { window.StillChat?.toggle(); scheduleChromeHide(400); }
+    else if (mode === "agents") { if (agentPanel.hidden) showAgentPanel({ keyboard: event?.detail === 0 }); else hideAgentPanel(); }
     else if (mode === "bookmarks") renderBookmarks().catch(failed("bookmarks"));
     else if (mode === "history") renderHistory().catch(failed("history"));
     else if (mode === "downloads") renderDownloads().catch(failed("downloads"));
@@ -2867,6 +2869,7 @@
     if (now - state.lastUtilityWheel < 95 || !event.deltaY) return;
     state.lastUtilityWheel = now;
     hideUtilityPanel();
+    hideAgentPanel();
     const direction = event.deltaY > 0 ? 1 : -1;
     const current = Math.max(0, utilityModes.indexOf(state.utilityMode));
     state.utilityMode = utilityModes[(current + direction + utilityModes.length) % utilityModes.length];
@@ -3300,8 +3303,7 @@
           { duration: 360, delay: 30 + index * 22, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "backwards" });
       });
     }
-    agentButton.setAttribute("aria-expanded", "true");
-    agentButton.classList.add("panel-open");
+    utilityButton.classList.add("panel-open");
     clearInterval(gallery.clock);
     gallery.clock = setInterval(refreshAgentPanel, 1000);
     hideAgentView();
@@ -3316,19 +3318,14 @@
     clearInterval(gallery.clock);
     clearTimeout(gallery.timer);
     gallery.timer = 0;
-    agentButton.setAttribute("aria-expanded", "false");
-    agentButton.classList.remove("panel-open");
+    utilityButton.classList.remove("panel-open");
     const done = () => { agentPanel.hidden = true; };
     if (animationsAllowed()) {
       agentPanel.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: "cubic-bezier(.42, 0, 1, 1)" }).finished.then(done, done);
     } else done();
-    if (agentPanel.contains(document.activeElement)) (gallery.opener?.isConnected ? gallery.opener : agentButton).focus({ preventScroll: true });
+    if (agentPanel.contains(document.activeElement)) (gallery.opener?.isConnected ? gallery.opener : utilityButton).focus({ preventScroll: true });
   }
 
-  agentButton.addEventListener("click", (event) => {
-    if (agentPanel.hidden) showAgentPanel({ keyboard: event.detail === 0 });
-    else hideAgentPanel();
-  });
   galleryClose.addEventListener("click", hideAgentPanel);
   galleryLiveSwitch.addEventListener("click", () => {
     const next = !agentViewEnabled();
@@ -3360,19 +3357,23 @@
 
   // While the agent works the mark turns; when it stops, the turn eases on
   // to the next resting angle instead of snapping back.
-  const agentGlyph = agentButton.querySelector(".agent-glyph");
+  // The mark is the utility button's "Agent tabs" icon, when that is the
+  // button's current mode.
   const TURN_MS = 1500;
   let agentTurn = null;
+  let agentGlyph = null;
   function startAgentTurn() {
-    agentButton.classList.add("working");
+    utilityButton.classList.add("agent-working");
     if (agentTurn || !animationsAllowed()) return;
+    agentGlyph = utilityStage.querySelector(".agents-mode-icon");
+    if (!agentGlyph) return;
     agentTurn = agentGlyph.animate([{ rotate: "0deg" }, { rotate: "360deg" }], { duration: TURN_MS, iterations: Infinity });
   }
   function settleAgentTurn() {
-    agentButton.classList.remove("working");
+    utilityButton.classList.remove("agent-working");
     const turn = agentTurn;
     agentTurn = null;
-    if (!turn) return;
+    if (!turn || !agentGlyph?.isConnected) { turn?.cancel(); return; }
     const angle = ((turn.currentTime || 0) % TURN_MS) / TURN_MS * 360;
     turn.cancel();
     const rest = Math.ceil((angle + 1) / 90) * 90;
@@ -3640,7 +3641,8 @@
     agentState.engine = engine;
     const connected = clients.length > 0;
     const arrived = clients.filter((name) => !before.has(name));
-    agentButton.hidden = !connected;
+    // The agent gallery lives on the utility button ("Agent tabs").
+    agentButton.hidden = true;
     const label = connected ? `${agentNames()} ${new Set(clients).size > 1 ? "are" : "is"} using Still` : "No agent connected";
     agentButton.title = label;
     agentButton.setAttribute("aria-label", label);

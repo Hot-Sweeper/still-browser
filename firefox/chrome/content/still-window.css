@@ -2197,3 +2197,6 @@
   .agent-tile-open:hover .agent-tile-canvas { scale: 1; }
 }
 #still-agent-gallery:focus { outline: none; }
+.agents-mode-icon .agent-star { fill: currentColor; stroke: none; }
+.agents-mode-icon .agent-orbit { fill: currentColor; stroke: none; opacity: .7; }
+#still-chrome .agent-working .agents-mode-icon .agent-orbit { opacity: 1; fill: rgb(var(--still-agent-rgb)); }
