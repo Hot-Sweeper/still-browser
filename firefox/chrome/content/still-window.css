@@ -1978,7 +1978,8 @@
    The agent button's page: every hidden agent tab as a live picture, in a
    grid like a video site, with the agent's pointer where it last acted.
    It sits under the bar, so a picture can be dragged straight onto it. */
-#still-agent-gallery {
+#still-agent-gallery,
+#still-settings {
   position: absolute;
   inset: 0;
   color: var(--still-text);
@@ -1987,7 +1988,9 @@
   -moz-window-dragging: no-drag;
   transition: opacity 180ms var(--still-ease-out);
 }
-#still-agent-gallery[hidden] { display: none; }
+#still-agent-gallery[hidden],
+#still-settings[hidden] { display: none; }
+#still-settings:focus { outline: none; }
 #still-agent-gallery.dragging { opacity: .55; }
 .agent-gallery-scroll {
   position: absolute;
@@ -2200,3 +2203,72 @@
 .agents-mode-icon .agent-star { fill: currentColor; stroke: none; }
 .agents-mode-icon .agent-orbit { fill: currentColor; stroke: none; opacity: .7; }
 #still-chrome .agent-working .agents-mode-icon .agent-orbit { opacity: 1; fill: rgb(var(--still-agent-rgb)); }
+
+/* --------------------------------------------------------------- settings
+   One column of plain rows grouped under small headings; switches apply at
+   once. Shares the agent gallery's page, header and close button. */
+.settings-body { display: grid; gap: 30px; max-width: 720px; padding-bottom: 24px; }
+.settings-section { display: grid; gap: 8px; }
+#still-layer .settings-section h3 { margin: 0 0 2px; color: var(--still-muted); font-size: 13px; font-weight: 650; }
+.settings-note { margin: 0 0 6px; color: var(--still-muted); font-size: 13px; line-height: 1.45; }
+.settings-rows { display: grid; gap: 2px; }
+#still-layer .settings-row {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  color: var(--still-text);
+  font: inherit;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 120ms var(--still-ease-out);
+}
+#still-layer .settings-row.mode { grid-template-columns: 22px minmax(0, 1fr) auto; }
+#still-layer .settings-row:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--still-text) 7%, transparent); }
+#still-layer .settings-row:disabled { opacity: .5; cursor: default; background: transparent; }
+#still-layer .settings-row[aria-disabled="true"] { cursor: default; }
+#still-layer .settings-row[aria-disabled="true"] .agent-switch { opacity: .45; }
+#still-layer .settings-row.segmented-row { cursor: default; }
+#still-layer .settings-row.segmented-row:hover { background: transparent; }
+.settings-copy { min-width: 0; display: grid; gap: 2px; }
+.settings-copy strong { font-size: 14px; font-weight: 600; }
+.settings-copy small { color: var(--still-muted); font-size: 12.5px; line-height: 1.4; }
+.settings-mode-icon { display: grid; place-items: center; color: var(--still-text); }
+#still-layer .settings-mode-icon svg { width: 18px; height: 18px; }
+.settings-mode-icon .agent-star { fill: currentColor; stroke: none; }
+.settings-mode-icon .agent-orbit { fill: currentColor; stroke: none; }
+#still-layer .settings-row[aria-checked="true"] .agent-switch { background: rgb(var(--still-agent-rgb)); }
+#still-layer .settings-row[aria-checked="true"] .agent-switch-knob { translate: 14px 0; }
+#still-layer .settings-chevron { width: 16px; height: 16px; color: var(--still-muted); }
+.settings-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--still-text) 7%, transparent);
+  border-radius: 10px;
+}
+#still-layer .settings-segmented button {
+  height: 28px;
+  padding: 0 12px;
+  color: var(--still-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 560;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 140ms var(--still-ease-out), color 140ms var(--still-ease-out);
+}
+#still-layer .settings-segmented button:hover { color: var(--still-text); }
+#still-layer .settings-segmented button[aria-checked="true"] {
+  color: var(--still-text);
+  background: var(--still-pill-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+}

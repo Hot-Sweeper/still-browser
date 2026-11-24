@@ -655,6 +655,8 @@ function applyWindowIcon(win) {
 
 export const StillShared = {
   extensionReady,
+  gridApiServer,
+  refreshSearchConfig: () => writeLocalConfig(stillFile("extension")),
   faviconsFor: (urls) => faviconsFor(lazy.BrowserWindowTracker.getTopWindow(), urls),
   startWindowMove,
   cursorInWindow,

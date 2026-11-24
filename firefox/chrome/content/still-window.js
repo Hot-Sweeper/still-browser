@@ -90,10 +90,15 @@
     return svg;
   }
 
-  const utilityModes = ["chat", "agents", "bookmarks", "history", "downloads", "permissions", "browser", "theme", "tabdock"];
+  // Every mode the utility button can have, in its order. Settings picks
+  // which are on; by default the first five. Settings itself always stays.
+  const utilityModes = ["downloads", "agents", "history", "bookmarks", "settings", "chat", "permissions", "browser", "theme", "tabdock"];
+  const PREF_UTILITY_MODES = "still.utility.modes";
+  const DEFAULT_UTILITY_MODES = "downloads,agents,history,bookmarks,settings";
   const utilityMeta = {
     chat: { label: "Side chat (Ctrl+E)", paths: ["M6.8 5h10.4a2.3 2.3 0 0 1 2.3 2.3v6.2a2.3 2.3 0 0 1-2.3 2.3h-5.7l-4 3.2v-3.2h-.7a2.3 2.3 0 0 1-2.3-2.3V7.3A2.3 2.3 0 0 1 6.8 5Z", "M9 9.6h6M9 12.2h3.6"] },
     agents: { label: "Agent tabs", className: "agents-mode-icon", paths: [["path", { class: "agent-star", d: "M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z" }], ["circle", { class: "agent-orbit", cx: "18.2", cy: "5.6", r: "1.15" }]] },
+    settings: { label: "Settings", paths: ["M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z", "M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3.9a7.5 7.5 0 0 0-2.6-1.5L14.1 2.6h-4.2L9.5 5a7.5 7.5 0 0 0-2.6 1.5l-2.3-.9-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-.9A7.5 7.5 0 0 0 9.5 19l.4 2.4h4.2l.4-2.4a7.5 7.5 0 0 0 2.6-1.5l2.3.9 2-3.4Z"] },
     bookmarks: { label: "Bookmarks", paths: ["m12 3.7 2.5 5.1 5.6.8-4.05 3.95.96 5.58L12 16.5l-5.01 2.63.96-5.58L3.9 9.6l5.6-.8L12 3.7Z"] },
     history: { label: "History", paths: ["M4.5 5.8v4.4h4.4M5 10a7.5 7.5 0 1 1 .8 5.2M12 7.6V12l3.1 1.8"] },
     downloads: { label: "Downloads", paths: ["M12 3.5v11m-4-4 4 4 4-4M5 19.5h14"] },
@@ -102,7 +107,24 @@
     theme: { label: "Appearance", className: "theme-mode-icon", paths: [["circle", { cx: "12", cy: "12", r: "8.5" }], ["path", { class: "theme-fill", d: "M12 3.5a8.5 8.5 0 0 0 0 17Z" }], ["circle", { class: "theme-full", cx: "12", cy: "12", r: "8.5" }], ["circle", { class: "theme-ring", cx: "12", cy: "12", r: "11" }]] },
     tabdock: { label: "Dock Slide", className: "tab-dock-mode-icon", paths: [["rect", { x: "3", y: "7.5", width: "18", height: "9", rx: "4.5" }], "M8.5 12h7m-2.3-2.2 2.3 2.2-2.3 2.2"] }
   };
-  if (!utilityModes.includes(state.utilityMode)) state.utilityMode = "bookmarks";
+  function enabledUtilityModes() {
+    const modes = new Set(Services.prefs.getStringPref(PREF_UTILITY_MODES, DEFAULT_UTILITY_MODES).split(",").map((mode) => mode.trim()));
+    modes.add("settings");
+    return modes;
+  }
+  function activeUtilityModes() {
+    const enabled = enabledUtilityModes();
+    return utilityModes.filter((mode) => enabled.has(mode));
+  }
+  function setUtilityModes(modes) {
+    Services.prefs.setStringPref(PREF_UTILITY_MODES, utilityModes.filter((mode) => modes.has(mode) || mode === "settings").join(","));
+    if (!activeUtilityModes().includes(state.utilityMode)) {
+      state.utilityMode = activeUtilityModes()[0];
+      Services.prefs.setStringPref(PREF_UTILITY, state.utilityMode);
+      renderUtilityButton({ animate: true });
+    }
+  }
+  if (!activeUtilityModes().includes(state.utilityMode)) state.utilityMode = activeUtilityModes().includes("bookmarks") ? "bookmarks" : activeUtilityModes()[0];
 
   function slotTabs() {
     return gBrowser.tabs.filter((tab) => !tab.hidden && !tab.closing);
@@ -429,13 +451,13 @@
   }
 
   function chromeBusy() {
-    return state.editingTab || state.draggedTab || chrome.matches(":hover") || !utilityPanel.hidden || !agentPanel.hidden;
+    return state.editingTab || state.draggedTab || chrome.matches(":hover") || !utilityPanel.hidden || !agentPanel.hidden || !settingsPage.hidden;
   }
 
   function scheduleChromeHide(delay = 300) {
     clearTimeout(state.hideTimer);
     state.hideTimer = setTimeout(() => {
-      if (state.editingTab || state.draggedTab || chrome.matches(":hover") || !agentPanel.hidden) return;
+      if (state.editingTab || state.draggedTab || chrome.matches(":hover") || !agentPanel.hidden || !settingsPage.hidden) return;
       hideUtilityPanel();
       if (chrome.contains(document.activeElement)) document.activeElement.blur();
       chrome.classList.remove("open");
@@ -2840,6 +2862,7 @@
       if (!utilityPanel.hidden) utilityPanel.append(emptyNote(`Could not load ${what}. Close this panel and try again.`));
     };
     if (mode === "chat") { window.StillChat?.toggle(); scheduleChromeHide(400); }
+    else if (mode === "settings") { if (settingsPage.hidden) showSettings({ keyboard: event?.detail === 0 }); else hideSettings(); }
     else if (mode === "agents") { if (agentPanel.hidden) showAgentPanel({ keyboard: event?.detail === 0 }); else hideAgentPanel(); }
     else if (mode === "bookmarks") renderBookmarks().catch(failed("bookmarks"));
     else if (mode === "history") renderHistory().catch(failed("history"));
@@ -2869,9 +2892,11 @@
     state.lastUtilityWheel = now;
     hideUtilityPanel();
     hideAgentPanel();
+    hideSettings();
     const direction = event.deltaY > 0 ? 1 : -1;
-    const current = Math.max(0, utilityModes.indexOf(state.utilityMode));
-    state.utilityMode = utilityModes[(current + direction + utilityModes.length) % utilityModes.length];
+    const modes = activeUtilityModes();
+    const current = Math.max(0, modes.indexOf(state.utilityMode));
+    state.utilityMode = modes[(current + direction + modes.length) % modes.length];
     Services.prefs.setStringPref(PREF_UTILITY, state.utilityMode);
     renderUtilityButton({ animate: true, direction });
   }, { passive: false });
@@ -3290,6 +3315,7 @@
 
   function showAgentPanel({ keyboard = false } = {}) {
     hideUtilityPanel();
+    hideSettings();
     gallery.opener = document.activeElement;
     agentPanel.hidden = false;
     agentPanel.classList.add("opening");
@@ -3356,6 +3382,169 @@
 
   // While the agent works the mark turns; when it stops, the turn eases on
   // to the next resting angle instead of snapping back.
+  // ------------------------------------------------------------ settings
+  // A page of its own under the bar, like the agent gallery: what the
+  // utility button switches between, appearance, search, agents, slots and
+  // imports. Every change applies at once; there is nothing to save.
+
+  const settingsPage = h("section", { id: "still-settings", class: "still-page", hidden: true, role: "dialog", "aria-label": "Settings", tabindex: "-1" });
+  const settingsBody = h("div", { class: "settings-body" });
+  const settingsClose = h("button", { type: "button", class: "agent-gallery-close", title: "Close (Esc)", "aria-label": "Close settings" }, closeGlyph());
+  settingsPage.append(h("div", { class: "agent-gallery-scroll" },
+    h("header", { class: "agent-gallery-head" },
+      h("div", { class: "agent-gallery-heading" }, h("h2", { class: "agent-gallery-title", text: "Settings" })),
+      h("div", { class: "agent-gallery-actions" }, settingsClose)),
+    settingsBody));
+  chrome.before(settingsPage);
+
+  const MODE_NOTES = {
+    downloads: "Files you downloaded",
+    agents: "Tabs agents work in, live",
+    history: "Pages you visited",
+    bookmarks: "Bookmark this page, open saved ones",
+    settings: "Always on the button",
+    chat: "Ask an agent beside the page (Ctrl+E works anyway)",
+    permissions: "Camera, microphone and more for this site",
+    browser: "Import sign-ins, history and bookmarks",
+    theme: "Click to cycle the theme",
+    tabdock: "Slide pages when switching from the dock"
+  };
+
+  function settingSwitch(label, note, on, onChange) {
+    const knob = h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" }));
+    const row = h("button", { type: "button", class: "settings-row", role: "switch", "aria-checked": String(Boolean(on)) },
+      h("span", { class: "settings-copy" }, h("strong", { text: label }), note ? h("small", { text: note }) : null), knob);
+    row.addEventListener("click", () => {
+      const next = row.getAttribute("aria-checked") !== "true";
+      row.setAttribute("aria-checked", String(next));
+      onChange(next);
+    });
+    return row;
+  }
+
+  function settingsSection(title, ...rows) {
+    return h("section", { class: "settings-section" }, h("h3", { text: title }), h("div", { class: "settings-rows" }, ...rows.filter(Boolean)));
+  }
+
+  function settingAction(label, note, onClick) {
+    const row = h("button", { type: "button", class: "settings-row action" },
+      h("span", { class: "settings-copy" }, h("strong", { text: label }), note ? h("small", { text: note }) : null),
+      icon([["path", { d: "m9.5 6 6 6-6 6" }]], "settings-chevron"));
+    row.addEventListener("click", onClick);
+    return row;
+  }
+
+  function buttonModeRow(mode) {
+    const meta = utilityMeta[mode];
+    const locked = mode === "settings";
+    const on = locked || enabledUtilityModes().has(mode);
+    const row = h("button", { type: "button", class: "settings-row mode", role: "switch", "aria-checked": String(on), "aria-disabled": String(locked) },
+      h("span", { class: "settings-mode-icon" }, icon(meta.paths, meta.className || "")),
+      h("span", { class: "settings-copy" }, h("strong", { text: meta.label.replace(/ \(.*\)$/, "") }), h("small", { text: MODE_NOTES[mode] || "" })),
+      h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" })));
+    if (!locked) {
+      row.addEventListener("click", () => {
+        const modes = enabledUtilityModes();
+        if (modes.has(mode)) modes.delete(mode); else modes.add(mode);
+        setUtilityModes(modes);
+        row.setAttribute("aria-checked", String(modes.has(mode)));
+      });
+    }
+    return row;
+  }
+
+  async function renderSettings() {
+    const theme = Services.prefs.getStringPref(PREF_THEME, "system");
+    const themeRow = h("div", { class: "settings-row segmented-row" },
+      h("span", { class: "settings-copy" }, h("strong", { text: "Theme" })),
+      h("div", { class: "settings-segmented", role: "radiogroup", "aria-label": "Theme" },
+        ...themes.map((name) => {
+          const option = h("button", { type: "button", role: "radio", "aria-checked": String(name === theme),
+            text: { system: "System", light: "Light", dark: "Dark", oled: "OLED" }[name] });
+          option.addEventListener("click", () => {
+            Services.prefs.setStringPref(PREF_THEME, name);
+            applyTheme(name);
+            for (const other of option.parentNode.children) other.setAttribute("aria-checked", String(other === option));
+          });
+          return option;
+        })));
+    const aiChoice = Services.prefs.getStringPref("still.search.ai", "").trim();
+    let server = "";
+    try { server = await lazy.StillShared.gridApiServer(); } catch {}
+    const custom = /^https?:\/\//.test(aiChoice) ? aiChoice : "";
+    const where = custom || server;
+    const host = where ? (() => { try { return new URL(where).host; } catch { return where; } })() : "";
+    const summaries = settingSwitch("Summaries", where
+      ? `A short answer above results, written by your GridAPI (${host})`
+      : "Needs GridUI Desktop signed in to your GridAPI, or an address in still.search.ai",
+      aiChoice !== "off" && Boolean(where), (on) => {
+        Services.prefs.setStringPref("still.search.ai", on ? custom : "off");
+        lazy.StillShared.refreshSearchConfig?.().catch(console.error);
+      });
+    if (!where) summaries.disabled = true;
+    const tab = gBrowser.selectedTab;
+    const siteHost = (() => { try { return new URL(tabUrl(tab)).host; } catch { return ""; } })();
+    settingsBody.replaceChildren(
+      settingsSection("Button", h("p", { class: "settings-note", text: "What the button beside the window controls switches between. Scroll on it to switch, click to open." }),
+        ...utilityModes.map(buttonModeRow)),
+      settingsSection("Appearance", themeRow),
+      settingsSection("Search", summaries),
+      settingsSection("Agents",
+        settingSwitch("Let agents use Still", "Agents like Claude Code and Codex can open and use tabs with your sign-ins",
+          Services.prefs.getBoolPref("still.agent.enabled", true), (on) => {
+            Services.prefs.setBoolPref("still.agent.enabled", on);
+            if (!on) lazy.StillAgent.disconnectAll().catch(console.error);
+          }),
+        settingSwitch("Live view", "A small live picture when an agent works in a tab you are not looking at",
+          agentViewEnabled(), (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); })),
+      settingsSection("Slots",
+        settingSwitch("Dock slide", "Pages slide when you switch slots from the dock", dockSlideEnabled(), (on) => {
+          Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on);
+          renderUtilityButton();
+        })),
+      settingsSection("Sites and imports",
+        siteHost ? settingAction(`Permissions for ${siteHost}`, "Camera, microphone, location, notifications", () => { hideSettings(); renderPermissions(); }) : null,
+        settingAction("Import sign-ins from Opera GX", "Close Opera GX first", () => { hideSettings(); runImport("opera"); }),
+        settingAction("Import history from Opera GX", "Pages and site icons, so suggestions know your sites", () => { hideSettings(); runHistoryImport(); }),
+        settingAction("Import bookmarks, history and passwords", "From Opera GX, Chrome, Edge or a file", () => {
+          hideSettings();
+          try { lazy.MigrationUtils.showMigrationWizard(window, {}); } catch { showToast("Could not open the import window."); }
+        })));
+  }
+
+  const settingsState = { opener: null };
+  function showSettings({ keyboard = false } = {}) {
+    hideUtilityPanel();
+    hideAgentPanel();
+    settingsState.opener = document.activeElement;
+    settingsPage.hidden = false;
+    utilityButton.classList.add("panel-open");
+    renderSettings().then(() => {
+      if (keyboard) settingsBody.querySelector("button")?.focus({ preventScroll: true });
+    });
+    if (!keyboard) settingsPage.focus({ preventScroll: true });
+    if (animationsAllowed()) {
+      settingsPage.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: "cubic-bezier(0, 0, .58, 1)" });
+      settingsBody.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }],
+        { duration: 320, easing: "cubic-bezier(.16, 1, .3, 1)" });
+    }
+  }
+
+  function hideSettings() {
+    if (settingsPage.hidden) return;
+    utilityButton.classList.remove("panel-open");
+    const done = () => { settingsPage.hidden = true; };
+    if (animationsAllowed()) {
+      settingsPage.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, easing: "cubic-bezier(.42, 0, 1, 1)" }).finished.then(done, done);
+    } else done();
+    if (settingsPage.contains(document.activeElement)) (settingsState.opener?.isConnected ? settingsState.opener : utilityButton).focus({ preventScroll: true });
+  }
+
+  settingsClose.addEventListener("click", hideSettings);
+  settingsPage.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hideSettings(); }
+  });
+
   // The mark is the utility button's "Agent tabs" icon, when that is the
   // button's current mode.
   const TURN_MS = 1500;
@@ -4210,7 +4399,7 @@
     if (!event.target.closest?.(".utility-button, .utility-panel:not(.agent-panel)")) hideUtilityPanel();
     // The agent gallery is a page, not a popup: clicks inside it never close
     // it. Picking a slot on the bar does, to show that slot.
-    if (event.target.closest?.("#still-chrome .slot")) hideAgentPanel();
+    if (event.target.closest?.("#still-chrome .slot")) { hideAgentPanel(); hideSettings(); }
   }, true);
 
   // Coming back to the window briefly shows the slots, as in the Electron build.
