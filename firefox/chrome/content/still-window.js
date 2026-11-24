@@ -435,9 +435,8 @@
   function scheduleChromeHide(delay = 300) {
     clearTimeout(state.hideTimer);
     state.hideTimer = setTimeout(() => {
-      if (state.editingTab || state.draggedTab || chrome.matches(":hover")) return;
+      if (state.editingTab || state.draggedTab || chrome.matches(":hover") || !agentPanel.hidden) return;
       hideUtilityPanel();
-      hideAgentPanel();
       if (chrome.contains(document.activeElement)) document.activeElement.blur();
       chrome.classList.remove("open");
     }, delay);
@@ -4209,7 +4208,9 @@
 
   document.addEventListener("pointerdown", (event) => {
     if (!event.target.closest?.(".utility-button, .utility-panel:not(.agent-panel)")) hideUtilityPanel();
-    if (!event.target.closest?.(".agent-control, .agent-panel")) hideAgentPanel();
+    // The agent gallery is a page, not a popup: clicks inside it never close
+    // it. Picking a slot on the bar does, to show that slot.
+    if (event.target.closest?.("#still-chrome .slot")) hideAgentPanel();
   }, true);
 
   // Coming back to the window briefly shows the slots, as in the Electron build.
