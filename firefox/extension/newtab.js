@@ -626,7 +626,7 @@ async function search(query, { category = 'general', push = true, animate = true
 // GridUI's settings or the still.search.ai pref); without one, no summary.
 
 const SUMMARY_SOURCES = 8;
-const SPARK_GLYPH = [['path', { d: 'M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z', fill: 'currentColor', stroke: 'none' }]];
+const FOLLOW_GLYPH = [['path', { d: 'M5 7.5h9.5a4.5 4.5 0 0 1 0 9H9M8.5 4 5 7.5 8.5 11' }]];
 const summaryCache = new Map();        // query -> { messages, turns }
 let summaryController = null;
 const aiConfig = fetch('local-config.json', { cache: 'no-store' })
@@ -638,26 +638,68 @@ function summaryPrompt(query, sources) {
   const list = sources.map((item, index) => `[${index + 1}] ${item.title}\n${item.url}\n${item.content}`).join('\n\n');
   return [
     { role: 'system', content: 'You answer web searches inside a browser. Use only the numbered search results. '
-      + 'Answer in the language of the query, in 2 to 4 short sentences of plain text: no headings, no bold, no lists unless the query asks for steps. '
+      + 'Answer in the language of the query, in 2 to 4 short sentences of plain text: no headings, no lists unless the query asks for steps. '
+      + 'Wrap the exact fact the query asks for in **double asterisks** (for example **330 meters**, a date, a name or a price), once or twice per answer; make nothing else bold. '
       + 'Put citations like [1] or [2][3] right after the sentence they support. If the results do not answer the query, say so in one sentence.' },
     { role: 'user', content: `Query: ${query}\n\nSearch results:\n\n${list}` }
   ];
 }
 
-// Text with [n] turned into links to that result; stray markdown removed.
-function citedText(text, sources) {
-  const nodes = [];
-  const plain = text.replace(/\*\*|__|^#+\s*/gm, '').replace(/\s+(?=\[\d{1,2}\])/g, '');
-  let last = 0;
-  for (const match of plain.matchAll(/\[(\d{1,2})\]/g)) {
-    const source = sources[Number(match[1]) - 1];
-    if (!source) continue;
-    if (match.index > last) nodes.push(document.createTextNode(plain.slice(last, match.index)));
-    nodes.push(el('a', { class: 'cite', href: source.url, title: `${source.title} (${hostOf(source.url)})`, text: match[1] }));
-    last = match.index + match[0].length;
+// A site's short name: "en.wikipedia.org" -> "Wikipedia".
+function siteName(url) {
+  const parts = hostOf(url).split('.').filter(Boolean);
+  const name = parts.length > 2 && /^(co|com|org|net|ac|gov)$/.test(parts.at(-2)) ? parts.at(-3) : parts.at(-2) || parts[0] || '';
+  return name ? name[0].toUpperCase() + name.slice(1) : hostOf(url);
+}
+
+// A site's icon when Still already has it, else its letter (swapped for the
+// icon once it arrives).
+function siteIcon(url) {
+  const known = iconsKnown.get(url);
+  return known ? el('img', { class: 'site-icon', src: known, alt: '', width: 16, height: 16 }) : siteLetter(url);
+}
+
+// Citations like [2][5][6] become one chip: the main source's icon with the
+// others' tucked behind it, its name, and how many more back the sentence.
+function citeChip(numbers, sources) {
+  const used = [];
+  const hosts = new Set();
+  for (const number of numbers) {
+    const source = sources[number - 1];
+    if (!source || hosts.has(hostOf(source.url))) continue;
+    hosts.add(hostOf(source.url));
+    used.push(source);
   }
-  nodes.push(document.createTextNode(plain.slice(last)));
-  return nodes;
+  if (!used.length) return null;
+  const [main, ...rest] = used;
+  return el('a', { class: 'cite', href: main.url, title: used.map((source) => `${source.title} (${hostOf(source.url)})`).join('\n') },
+    el('span', { class: 'cite-icons', 'aria-hidden': 'true' }, ...used.slice(0, 3).map((source) => siteIcon(source.url))),
+    el('span', { class: 'cite-name', text: siteName(main.url) }),
+    rest.length ? el('span', { class: 'cite-more', text: `+${rest.length}` }) : null);
+}
+
+// The model's text: **the asked-for fact** in bold, citations as chips.
+// While it streams, an unclosed ** stays bold up to the end.
+function citedText(text, sources) {
+  const out = document.createDocumentFragment();
+  // Sources follow the sentence's own full stop: "tall.[1]" not "tall[1]."
+  const plain = text.replace(/__|^#+\s*/gm, '').replace(/\s+(?=\[\d{1,2}\])/g, '')
+    .replace(/((?:\[\d{1,2}\])+)([.,;:!?])/g, '$2$1');
+  let target = out;
+  let last = 0;
+  const flush = (end) => { if (end > last) target.append(document.createTextNode(plain.slice(last, end))); };
+  for (const match of plain.matchAll(/\*\*|(?:\[\d{1,2}\])+/g)) {
+    flush(match.index);
+    last = match.index + match[0].length;
+    if (match[0] === '**') {
+      if (target === out) { target = el('strong'); out.append(target); } else target = out;
+      continue;
+    }
+    const chip = citeChip([...match[0].matchAll(/\d+/g)].map(Number), sources);
+    if (chip) out.append(chip);
+  }
+  flush(plain.length);
+  return [out];
 }
 
 async function streamChat(endpoint, messages, signal, onText) {
@@ -702,6 +744,7 @@ async function runTurn(state, turn, endpoint) {
     const text = await streamChat(endpoint, state.messages, state.signal, (partial) => turn.body.replaceChildren(...citedText(partial, sources)));
     if (!text.trim()) throw new Error('empty');
     turn.body.replaceChildren(...citedText(text, sources));
+    requestIcons(turn.body);
     state.messages.push({ role: 'assistant', content: text });
     state.turns.push({ question: turn.question || '', text });
     return true;
@@ -727,10 +770,20 @@ async function renderSummary(data, query) {
   summaryCache.set(query, state);
 
   const turns = el('div', { class: 'summary-turns' });
-  const ask = el('input', { class: 'summary-ask', type: 'text', placeholder: 'Ask a follow-up', 'aria-label': 'Ask a follow-up about these results', autocomplete: 'off', spellcheck: 'false' });
-  const form_ = el('form', { class: 'summary-form' }, ask);
-  const block = el('section', { class: 'summary', 'aria-label': 'Summary', 'aria-busy': 'true' },
-    el('div', { class: 'summary-mark' }, svgIcon(SPARK_GLYPH)), turns, form_);
+  const ask = el('input', { class: 'summary-ask', type: 'text', placeholder: 'Ask about these results', 'aria-label': 'Follow-up question about these results', autocomplete: 'off', spellcheck: 'false' });
+  const form_ = el('form', { class: 'summary-form', hidden: true }, ask);
+  const follow = el('button', { type: 'button', class: 'summary-follow', hidden: true }, svgIcon(FOLLOW_GLYPH), document.createTextNode('Follow up'));
+  const block = el('section', { class: 'summary', 'aria-label': 'Summary', 'aria-busy': 'true' }, turns, follow, form_);
+  // Follow up opens a small field in its place; leaving it empty folds it back.
+  const fold = () => { form_.hidden = true; follow.hidden = false; };
+  follow.addEventListener('click', () => {
+    follow.hidden = true;
+    form_.hidden = false;
+    ask.focus();
+    if (motion) form_.animate([{ opacity: 0, transform: 'translateY(-3px)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: EASE });
+  });
+  ask.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); ask.value = ''; fold(); follow.focus(); } });
+  ask.addEventListener('blur', () => { if (!ask.value.trim() && block.getAttribute('aria-busy') !== 'true') fold(); });
   results.prepend(block);
   if (motion) block.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: EASE });
 
@@ -740,12 +793,14 @@ async function renderSummary(data, query) {
       turn.body.replaceChildren(...citedText(past.text, sources));
       turns.append(turn.node);
     }
+    requestIcons(turns);
   } else {
     const turn = summaryTurn('');
     turns.append(turn.node);
-    await runTurn(state, turn, config.aiEndpoint);
+    if (!(await runTurn(state, turn, config.aiEndpoint))) { block.setAttribute('aria-busy', 'false'); return; }
   }
   block.setAttribute('aria-busy', 'false');
+  follow.hidden = false;
 
   form_.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -759,6 +814,7 @@ async function renderSummary(data, query) {
     state.messages.push({ role: 'user', content: question });
     await runTurn(state, turn, config.aiEndpoint);
     block.setAttribute('aria-busy', 'false');
+    ask.focus();
   });
 }
 
