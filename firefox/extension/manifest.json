@@ -83,6 +83,6 @@
     "open_in_tab": true
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'self' http://127.0.0.1:48230 https://www.youtube.com https://*.youtube.com; img-src 'self' data: https:"
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'self' http://127.0.0.1:48230 https:; img-src 'self' data: https:"
   }
 }

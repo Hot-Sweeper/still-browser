@@ -566,6 +566,10 @@ async function search(query, { category = 'general', push = true, animate = true
   if (address) { location.href = address; return; }
   hideSuggestions();
   input.value = query;
+  // The search is made: the box lets go, so no cursor keeps blinking in it.
+  // Typing anywhere on the page still goes straight back to it.
+  if (document.activeElement === input) input.blur();
+  summaryController?.abort();
   current = { query, category, page: 1 };
   gallery = [];
   document.title = `${query} · Still Search`;
@@ -604,7 +608,7 @@ async function search(query, { category = 'general', push = true, animate = true
       layoutMasonry();
       if (more) nearBottom.observe(more);
     }
-    if (category === 'general') renderInfobox(data);
+    if (category === 'general') { renderInfobox(data); renderSummary(data, query); }
     requestIcons(results);
   } catch {
     if (controller.signal.aborted || current.query !== query) return;
@@ -614,8 +618,153 @@ async function search(query, { category = 'general', push = true, animate = true
   }
 }
 
+// ------------------------------------------------------------ summary
+// A short answer above the results, written by the user's own GridAPI (a
+// local model on their GPU server) from the results on this page. It
+// streams in, cites results as [1], [2], and takes follow-up questions.
+// Still writes the address into local-config.json on this machine (from
+// GridUI's settings or the still.search.ai pref); without one, no summary.
+
+const SUMMARY_SOURCES = 8;
+const SPARK_GLYPH = [['path', { d: 'M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z', fill: 'currentColor', stroke: 'none' }]];
+const summaryCache = new Map();        // query -> { messages, turns }
+let summaryController = null;
+const aiConfig = fetch('local-config.json', { cache: 'no-store' })
+  .then((response) => (response.ok ? response.json() : {}))
+  .then((config) => (/^https?:\/\//.test(config.aiEndpoint || '') ? config : {}))
+  .catch(() => ({}));
+
+function summaryPrompt(query, sources) {
+  const list = sources.map((item, index) => `[${index + 1}] ${item.title}\n${item.url}\n${item.content}`).join('\n\n');
+  return [
+    { role: 'system', content: 'You answer web searches inside a browser. Use only the numbered search results. '
+      + 'Answer in the language of the query, in 2 to 4 short sentences of plain text: no headings, no bold, no lists unless the query asks for steps. '
+      + 'Put citations like [1] or [2][3] right after the sentence they support. If the results do not answer the query, say so in one sentence.' },
+    { role: 'user', content: `Query: ${query}\n\nSearch results:\n\n${list}` }
+  ];
+}
+
+// Text with [n] turned into links to that result; stray markdown removed.
+function citedText(text, sources) {
+  const nodes = [];
+  const plain = text.replace(/\*\*|__|^#+\s*/gm, '').replace(/\s+(?=\[\d{1,2}\])/g, '');
+  let last = 0;
+  for (const match of plain.matchAll(/\[(\d{1,2})\]/g)) {
+    const source = sources[Number(match[1]) - 1];
+    if (!source) continue;
+    if (match.index > last) nodes.push(document.createTextNode(plain.slice(last, match.index)));
+    nodes.push(el('a', { class: 'cite', href: source.url, title: `${source.title} (${hostOf(source.url)})`, text: match[1] }));
+    last = match.index + match[0].length;
+  }
+  nodes.push(document.createTextNode(plain.slice(last)));
+  return nodes;
+}
+
+async function streamChat(endpoint, messages, signal, onText) {
+  const response = await fetch(new URL('v1/chat/completions', endpoint), {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json', 'X-GridAPI-Project': 'Still', 'X-GridAPI-Title': 'Search summary' },
+    body: JSON.stringify({ messages, stream: true, max_tokens: 400, temperature: 0.3 })
+  });
+  if (!response.ok || !response.body) throw new Error(`status ${response.status}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') return text;
+      try {
+        const piece = JSON.parse(data).choices?.[0]?.delta?.content;
+        if (piece) { text += piece; onText(text); }
+      } catch {}
+    }
+  }
+  return text;
+}
+
+function summaryTurn(question) {
+  const body = el('p', { class: 'summary-text' }, el('span', { class: 'summary-wait', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')));
+  return { node: el('div', { class: 'summary-turn' }, question ? el('p', { class: 'summary-question', text: question }) : null, body), body };
+}
+
+async function runTurn(state, turn, endpoint) {
+  const { sources } = state;
+  try {
+    const text = await streamChat(endpoint, state.messages, state.signal, (partial) => turn.body.replaceChildren(...citedText(partial, sources)));
+    if (!text.trim()) throw new Error('empty');
+    turn.body.replaceChildren(...citedText(text, sources));
+    state.messages.push({ role: 'assistant', content: text });
+    state.turns.push({ question: turn.question || '', text });
+    return true;
+  } catch (error) {
+    if (turn.question) state.messages.pop();
+    if (state.signal.aborted) return false;
+    turn.body.replaceChildren(el('span', { class: 'summary-error', text: 'Your GridAPI did not answer, so there is no summary. It may be busy with another job.' }));
+    return false;
+  }
+}
+
+async function renderSummary(data, query) {
+  summaryController?.abort();
+  const config = await aiConfig;
+  if (!config.aiEndpoint || current.query !== query || current.category !== 'general') return;
+  const sources = (data.results || []).filter((item) => safeHttp(item.url) && clean(item.content))
+    .slice(0, SUMMARY_SOURCES).map((item) => ({ title: clean(item.title) || hostOf(item.url), url: item.url, content: clean(item.content).slice(0, 500) }));
+  if (sources.length < 2) return;
+  const controller = new AbortController();
+  summaryController = controller;
+  const cached = summaryCache.get(query);
+  const state = { sources, signal: controller.signal, messages: cached?.messages || summaryPrompt(query, sources), turns: cached?.turns || [] };
+  summaryCache.set(query, state);
+
+  const turns = el('div', { class: 'summary-turns' });
+  const ask = el('input', { class: 'summary-ask', type: 'text', placeholder: 'Ask a follow-up', 'aria-label': 'Ask a follow-up about these results', autocomplete: 'off', spellcheck: 'false' });
+  const form_ = el('form', { class: 'summary-form' }, ask);
+  const block = el('section', { class: 'summary', 'aria-label': 'Summary', 'aria-busy': 'true' },
+    el('div', { class: 'summary-mark' }, svgIcon(SPARK_GLYPH)), turns, form_);
+  results.prepend(block);
+  if (motion) block.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: EASE });
+
+  if (state.turns.length) {
+    for (const past of state.turns) {
+      const turn = summaryTurn(past.question);
+      turn.body.replaceChildren(...citedText(past.text, sources));
+      turns.append(turn.node);
+    }
+  } else {
+    const turn = summaryTurn('');
+    turns.append(turn.node);
+    await runTurn(state, turn, config.aiEndpoint);
+  }
+  block.setAttribute('aria-busy', 'false');
+
+  form_.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const question = ask.value.trim();
+    if (!question || block.getAttribute('aria-busy') === 'true') return;
+    ask.value = '';
+    block.setAttribute('aria-busy', 'true');
+    const turn = summaryTurn(question);
+    turn.question = question;
+    turns.append(turn.node);
+    state.messages.push({ role: 'user', content: question });
+    await runTurn(state, turn, config.aiEndpoint);
+    block.setAttribute('aria-busy', 'false');
+  });
+}
+
 function goHome({ push = true } = {}) {
   searchController?.abort();
+  summaryController?.abort();
   current = { query: '', category: 'general', page: 1 };
   document.title = 'Still';
   input.value = '';

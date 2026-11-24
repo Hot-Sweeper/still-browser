@@ -36,6 +36,32 @@ function stillFile(...parts) {
   return file;
 }
 
+// Settings that belong to this machine, not to the code: the address of the
+// GridAPI that writes Still Search's summaries. The still.search.ai pref
+// wins ("off" turns summaries off, a URL sets the address); otherwise it is
+// the server GridUI Desktop is signed in to. The extension reads the file.
+async function gridApiServer() {
+  const home = Services.dirsvc.get("Home", Ci.nsIFile).path;
+  const candidates = Services.appinfo.OS === "WINNT"
+    ? [PathUtils.join(Services.dirsvc.get("AppData", Ci.nsIFile).path, "GridUI Desktop", "data", "settings.json")]
+    : [PathUtils.join(home, ".config", "GridUI Desktop", "data", "settings.json")];
+  for (const path of candidates) {
+    try {
+      const server = (await IOUtils.readJSON(path))?.server;
+      if (/^https?:\/\//.test(server || "")) return server;
+    } catch {}
+  }
+  return "";
+}
+
+async function writeLocalConfig(dir) {
+  const choice = Services.prefs.getStringPref("still.search.ai", "").trim();
+  const aiEndpoint = choice === "off" ? "" : /^https?:\/\//.test(choice) ? choice : await gridApiServer();
+  const file = dir.clone();
+  file.append("local-config.json");
+  await IOUtils.writeJSON(file.path, { aiEndpoint: aiEndpoint ? aiEndpoint.replace(/\/*$/, "/") : "" });
+}
+
 // Still's page features (start page, YouTube, channel manager) ship as a
 // WebExtension next to the runtime. Release Firefox only runs unsigned
 // extensions as temporary add-ons, so it is loaded again on every start.
@@ -45,6 +71,7 @@ async function startExtension() {
   const dir = stillFile("extension");
   if (!dir.exists()) return;
   try {
+    await writeLocalConfig(dir).catch((error) => console.error("Still could not write its local config", error));
     await lazy.AddonManager.installTemporaryAddon(dir);
     reopenStartPages();
   } catch (error) {

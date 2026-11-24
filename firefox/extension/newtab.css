@@ -746,3 +746,77 @@ html[data-category="images"] .tabs { margin-left: 0; }
 /* Images use the whole window width, like Pinterest. */
 html[data-category="images"] main { width: calc(100vw - 48px); }
 html[data-category="images"] .results-layout { margin-left: 0; }
+
+/* --------------------------------------------------------- summary
+   A short answer from the user's GridAPI above the results, with numbered
+   citations and room for a follow-up question. */
+.summary {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 12px;
+  margin: 0 0 18px;
+  padding: 15px 18px 14px 14px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.summary-mark { grid-row: 1 / span 2; padding-top: 2px; color: var(--muted); }
+.summary-mark .glyph, .summary-mark svg { display: block; width: 20px; height: 20px; }
+.summary[aria-busy="true"] .summary-mark { color: var(--text); }
+.summary[aria-busy="true"] .summary-mark svg { animation: still-summary-turn 1.6s linear infinite; }
+@keyframes still-summary-turn { to { transform: rotate(360deg); } }
+.summary-turns { min-width: 0; display: grid; gap: 14px; }
+.summary-turn { display: grid; gap: 4px; }
+.summary-question { margin: 0; color: var(--muted); font-size: 13px; font-weight: 600; }
+.summary-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  text-wrap: pretty;
+  white-space: pre-line;
+}
+.summary .cite {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin: 0 1px 0 3px;
+  padding: 0 4px;
+  color: var(--link);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: 2px;
+  background: var(--hover);
+  border-radius: 5px;
+  transition: background 120ms ease;
+}
+.summary .cite:hover { background: color-mix(in srgb, var(--link) 22%, transparent); }
+.summary-error { color: var(--muted); font-size: 14px; }
+.summary-wait { display: inline-flex; gap: 5px; padding: 8px 0; }
+.summary-wait i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: still-summary-wait 1s ease-in-out infinite alternate;
+}
+.summary-wait i:nth-child(2) { animation-delay: .16s; }
+.summary-wait i:nth-child(3) { animation-delay: .32s; }
+@keyframes still-summary-wait { from { opacity: .25; } to { opacity: .9; } }
+.summary-form { grid-column: 2; margin-top: 12px; }
+.summary-ask {
+  width: 100%;
+  padding: 9px 12px;
+  color: var(--text);
+  font: inherit;
+  background: var(--hover);
+  border: 0;
+  border-radius: 10px;
+  outline: none;
+  transition: box-shadow 120ms ease;
+}
+.summary-ask::placeholder { color: var(--muted); }
+.summary-ask:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--muted) 55%, transparent); }
+.summary[aria-busy="true"] .summary-ask { opacity: .6; }
