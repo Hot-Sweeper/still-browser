@@ -502,6 +502,7 @@
     switch (event.type) {
       case "options":
         renderChoices(event.options || []);
+        rememberChoices(state.agent, event.options || []);
         break;
       case "text":
         if (turn) addText(turn, event);
@@ -754,5 +755,49 @@
   setBusy(false);
   fitInput();
   agentLabel.textContent = currentAgent().name;
-  window.StillChat = { open, close, toggle, isOpen: () => state.open };
+  // What each agent offers (models, reasoning effort), kept so Settings can
+  // show them without starting the agent.
+  const PREF_OPTIONS = "still.chat.options.";
+  function rememberChoices(agent, options) {
+    if (!agent || !options.length) return;
+    try { Services.prefs.setStringPref(`${PREF_OPTIONS}${agent.id}`, JSON.stringify(options)); } catch {}
+  }
+
+  function knownChoices(agentId) {
+    try { return JSON.parse(Services.prefs.getStringPref(`${PREF_OPTIONS}${agentId}`, "[]")); } catch { return []; }
+  }
+
+  // Settings asks for an agent's choices it has not seen yet: a short-lived
+  // session reports them, then stops.
+  function loadChoices(agentId) {
+    const agent = agents().find((candidate) => candidate.id === agentId);
+    if (!agent) return Promise.resolve([]);
+    return new Promise((resolve, reject) => {
+      let chat = null;
+      const timer = setTimeout(() => { chat?.stop(); reject(new Error(`${agent.name} did not answer`)); }, 45000);
+      chat = lazy.StillChat.createChat(agent, (event) => {
+        if (event.type !== "options" || !event.options?.length) return;
+        clearTimeout(timer);
+        rememberChoices(agent, event.options);
+        chat.stop();
+        resolve(event.options);
+      });
+      chat.start().catch((error) => { clearTimeout(timer); chat.stop(); reject(error); });
+    });
+  }
+
+  // A choice made in Settings: saved for the agent, applied to its open chat.
+  function applyChoice(agentId, id, value) {
+    Services.prefs.setStringPref(`${PREF_CHOICE}${agentId}.${id}`, value);
+    if (state.chat && state.agent?.id === agentId) state.chat.choose(id, value).catch(showError);
+  }
+
+  function selectAgent(id) {
+    if (Services.prefs.getStringPref(PREF_AGENT, "codex") === id) return;
+    Services.prefs.setStringPref(PREF_AGENT, id);
+    if (state.chat) switchAgent();
+  }
+
+  window.StillChat = { open, close, toggle, isOpen: () => state.open, agents: () => agents(), knownChoices, loadChoices, applyChoice, selectAgent,
+    savedChoice: (agentId, id) => Services.prefs.getStringPref(`${PREF_CHOICE}${agentId}.${id}`, "") };
 })();

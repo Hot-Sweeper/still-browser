@@ -564,6 +564,13 @@ async function search(query, { category = 'general', push = true, animate = true
   if (!CATEGORIES.includes(category)) category = 'general';
   const address = asAddress(query);
   if (address) { location.href = address; return; }
+  // Another engine chosen in Still's settings answers instead of Still Search.
+  const { searchUrl } = await localConfig;
+  // Only for a search made now: restored or revisited result pages stay.
+  if (push && /^https?:\/\//.test(searchUrl || '') && category === 'general') {
+    location.href = searchUrl.replace('{q}', encodeURIComponent(query));
+    return;
+  }
   hideSuggestions();
   input.value = query;
   // The search is made: the box lets go, so no cursor keeps blinking in it.
@@ -629,10 +636,10 @@ const SUMMARY_SOURCES = 8;
 const FOLLOW_GLYPH = [['path', { d: 'M5 7.5h9.5a4.5 4.5 0 0 1 0 9H9M8.5 4 5 7.5 8.5 11' }]];
 const summaryCache = new Map();        // query -> { messages, turns }
 let summaryController = null;
-const aiConfig = fetch('local-config.json', { cache: 'no-store' })
+const localConfig = fetch('local-config.json', { cache: 'no-store' })
   .then((response) => (response.ok ? response.json() : {}))
-  .then((config) => (/^https?:\/\//.test(config.aiEndpoint || '') ? config : {}))
   .catch(() => ({}));
+const aiConfig = localConfig.then((config) => (/^https?:\/\//.test(config.aiEndpoint || '') ? config : {}));
 
 function summaryPrompt(query, sources) {
   const list = sources.map((item, index) => `[${index + 1}] ${item.title}\n${item.url}\n${item.content}`).join('\n\n');

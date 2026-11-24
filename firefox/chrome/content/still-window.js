@@ -225,6 +225,9 @@
     if (/^(https?|about|file|moz-extension):/i.test(input)) return input;
     if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(input)) return `http://${input}`;
     if (/^[\w.-]+\.[a-z]{2,}(:\d+)?(\/.*)?$/i.test(input)) return `https://${input}`;
+    // Another engine chosen in Settings gets the query directly.
+    const engineUrl = (() => { try { return lazy.StillShared.searchUrlFor(input); } catch { return ""; } })();
+    if (engineUrl) return engineUrl;
     // Results open in Still's own search page when the extension is loaded.
     const startPage = (() => { try { return BROWSER_NEW_TAB_URL; } catch { return ""; } })();
     if (/^moz-extension:\/\/[^/]+\/newtab\.html$/i.test(startPage)) return `${startPage}?q=${encodeURIComponent(input)}`;
@@ -3393,7 +3396,7 @@
   settingsPage.append(h("div", { class: "agent-gallery-scroll" }, h("div", { class: "settings-column" },
     h("header", { class: "agent-gallery-head" },
       h("div", { class: "agent-gallery-heading" }, h("h2", { class: "agent-gallery-title", text: "Settings" }),
-        h("p", { class: "agent-gallery-status", text: "Changes apply at once." })),
+        null),
       h("div", { class: "agent-gallery-actions" }, settingsClose)),
     settingsBody)));
   chrome.before(settingsPage);
@@ -3423,11 +3426,6 @@
     return row;
   }
 
-  function settingsSection(title, note, ...rows) {
-    return h("section", { class: "settings-section" }, h("h3", { text: title }),
-      note ? h("p", { class: "settings-note", text: note }) : null,
-      h("div", { class: "settings-rows" }, ...rows.filter(Boolean)));
-  }
 
   function settingAction(label, note, onClick) {
     const row = h("button", { type: "button", class: "settings-row action" },
@@ -3437,24 +3435,6 @@
     return row;
   }
 
-  function buttonModeRow(mode) {
-    const meta = utilityMeta[mode];
-    const locked = mode === "settings";
-    const on = locked || enabledUtilityModes().has(mode);
-    const row = h("button", { type: "button", class: "settings-row mode", role: "switch", "aria-checked": String(on), "aria-disabled": String(locked) },
-      h("span", { class: "settings-mode-icon" }, icon(meta.paths, meta.className || "")),
-      h("span", { class: "settings-copy" }, h("strong", { text: meta.label.replace(/ \(.*\)$/, "") }), h("small", { text: MODE_NOTES[mode] || "" })),
-      h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" })));
-    if (!locked) {
-      row.addEventListener("click", () => {
-        const modes = enabledUtilityModes();
-        if (modes.has(mode)) modes.delete(mode); else modes.add(mode);
-        setUtilityModes(modes);
-        row.setAttribute("aria-checked", String(modes.has(mode)));
-      });
-    }
-    return row;
-  }
 
   // A fact about how a feature works: a label and its value, often a
   // command or address in monospace, with an optional copy button.
@@ -3495,124 +3475,209 @@
     return { model: data.model || "unknown model", seconds: (performance.now() - started) / 1000 };
   }
 
-  async function renderSettings() {
-    const theme = Services.prefs.getStringPref(PREF_THEME, "system");
-    const themeRow = h("div", { class: "settings-row segmented-row" },
-      h("span", { class: "settings-copy" }, h("strong", { text: "Theme" })),
-      segmented("Theme", themes.map((name) => [name, { system: "System", light: "Light", dark: "Dark", oled: "OLED" }[name]]), theme, (name) => {
-        Services.prefs.setStringPref(PREF_THEME, name);
-        applyTheme(name);
-      }));
+  // Choices as tiles with their logos. The chosen one takes on its own
+  // color: a tinted face, a ring and a small mark in the corner.
+  function pickGrid(label, items, value, onPick, { compact = false } = {}) {
+    const grid = h("div", { class: `pick-grid${compact ? " compact" : ""}`, role: "radiogroup", "aria-label": label });
+    for (const item of items) {
+      const tile = h("button", { type: "button", class: "pick", role: "radio", "aria-checked": String(item.id === value), title: item.title || item.name },
+        h("span", { class: "pick-logo" }, item.node || (item.logo ? h("img", { src: item.logo, alt: "" }) : h("span", { class: "pick-letter", text: item.name[0] }))),
+        h("span", { class: "pick-name", text: item.name }));
+      tile.style.setProperty("--pick", item.color || "rgb(var(--still-agent-rgb))");
+      tile.addEventListener("click", () => {
+        if (tile.getAttribute("aria-checked") === "true") return;
+        for (const other of grid.children) other.setAttribute("aria-checked", String(other === tile));
+        if (animationsAllowed()) tile.querySelector(".pick-logo").animate([{ scale: ".82" }, { scale: "1" }], { duration: 320, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
+        onPick(item.id);
+      });
+      grid.append(tile);
+    }
+    return grid;
+  }
 
-    // Search: SearXNG locally, summaries from GridAPI (or another endpoint).
-    const aiChoice = Services.prefs.getStringPref("still.search.ai", "").trim();
+  // Toggle tiles: several can be on at once.
+  function toggleGrid(label, items, isOn, onToggle) {
+    const grid = h("div", { class: "pick-grid compact", role: "group", "aria-label": label });
+    for (const item of items) {
+      const tile = h("button", { type: "button", class: "pick", "aria-pressed": String(isOn(item.id)), title: item.title || item.name },
+        h("span", { class: "pick-logo" }, item.node), h("span", { class: "pick-name", text: item.name }));
+      if (item.locked) { tile.setAttribute("aria-disabled", "true"); tile.title = `${item.name} always stays on the button`; }
+      else tile.addEventListener("click", () => tile.setAttribute("aria-pressed", String(onToggle(item.id))));
+      grid.append(tile);
+    }
+    return grid;
+  }
+
+  // A small panel under a choice, for the settings that belong to it.
+  function detailPanel(...children) {
+    const panel = h("div", { class: "pick-detail" }, ...children.filter(Boolean));
+    if (animationsAllowed()) panel.animate([{ opacity: 0, transform: "translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(0, 0, .58, 1)" });
+    return panel;
+  }
+
+  function choiceSelect(label, choice, saved, onChange) {
+    const select = h("select", { class: "settings-select", "aria-label": label });
+    for (const item of choice.values) select.append(h("option", { value: item.value, text: item.name }));
+    select.value = choice.values.some((item) => item.value === saved) ? saved : choice.value;
+    select.addEventListener("change", () => onChange(select.value));
+    return h("label", { class: "detail-row" }, h("span", { text: label }), select);
+  }
+
+  const ENGINE_COLORS = { still: "rgb(var(--still-agent-rgb))", searxng: "#3050ff", google: "#4285f4", duckduckgo: "#de5833", brave: "#fb542b", bing: "#258ffa", ecosia: "#2ea05a", startpage: "#6563ff" };
+  const AGENT_LOGOS = { codex: ["resource://still/logos/openai.svg", "#10a37f"], claude: ["resource://still/logos/claude.svg", "#d97757"], t3: ["resource://still/logos/t3.png", "#8b5cf6"] };
+
+  function settingsGroup(title, ...children) {
+    return h("section", { class: "settings-section" }, h("h3", { text: title }), ...children.filter(Boolean));
+  }
+
+  async function renderSettings() {
+    // ---- search
+    const engines = lazy.StillShared.searchEngines || [];
+    const engineId = lazy.StillShared.searchEngine?.().id || "still";
+    const searchSlot = h("div");
+    const aiChoice = () => Services.prefs.getStringPref("still.search.ai", "").trim();
     let detected = "";
     try { detected = await lazy.StillShared.gridApiServer(); } catch {}
-    const custom = /^https?:\/\//.test(aiChoice) ? aiChoice : "";
-    const endpoint = custom || detected;
-    const modelRow = settingInfo("Model", endpoint ? "Checking…" : "No endpoint", { mono: true, note: "What writes the summaries, and how fast it answered" });
-    const runCheck = (url) => {
-      if (!url) { modelRow.stillValue.textContent = "No endpoint"; return; }
-      modelRow.stillValue.textContent = "Checking…";
-      checkSummaryModel(url).then(
-        ({ model, seconds }) => { modelRow.stillValue.textContent = `${model} · ${seconds.toFixed(1)} s`; },
-        (error) => { modelRow.stillValue.textContent = `Not answering (${error.message || error})`; });
-    };
-    const summaries = settingSwitch("Summaries", "A short answer above the results, with the asked-for fact in bold and its sources",
-      aiChoice !== "off" && Boolean(endpoint), (on) => {
-        Services.prefs.setStringPref("still.search.ai", on ? custom : "off");
+
+    const stillSearchDetail = () => {
+      const custom = /^https?:\/\//.test(aiChoice()) ? aiChoice() : "";
+      const endpoint = custom || detected;
+      const on = aiChoice() !== "off" && Boolean(endpoint);
+      const model = h("span", { class: "detail-chip mono", text: endpoint ? "Checking…" : "No endpoint" });
+      const runCheck = (url) => {
+        if (!url) { model.textContent = "No endpoint"; return; }
+        model.textContent = "Checking…";
+        checkSummaryModel(url).then(({ model: name, seconds }) => { model.textContent = `${name} · ${seconds.toFixed(1)} s`; model.title = name; },
+          (error) => { model.textContent = `Not answering (${error.message || error})`; });
+      };
+      const field = h("input", { class: "settings-field", type: "url", spellcheck: "false", value: custom, placeholder: detected || "https://your-server/", "aria-label": "Summary endpoint" });
+      const fieldRow = h("label", { class: "detail-row", hidden: true }, h("span", { text: "Endpoint" }), field);
+      field.addEventListener("change", () => {
+        const value = field.value.trim();
+        if (value && !/^https?:\/\//.test(value)) { field.setAttribute("aria-invalid", "true"); return; }
+        field.removeAttribute("aria-invalid");
+        Services.prefs.setStringPref("still.search.ai", value);
         lazy.StillShared.refreshSearchConfig?.().catch(console.error);
+        runCheck(value || detected);
       });
-    if (!endpoint) summaries.disabled = true;
-    const field = h("input", { class: "settings-field", type: "url", spellcheck: "false", value: custom,
-      placeholder: detected || "https://your-server/", "aria-label": "Summary endpoint" });
-    const saveEndpoint = () => {
-      const value = field.value.trim();
-      if (value && !/^https?:\/\//.test(value)) { field.setAttribute("aria-invalid", "true"); return; }
-      field.removeAttribute("aria-invalid");
-      if (value === custom && field.dataset.saved) return;
-      field.dataset.saved = "1";
-      if (aiChoice !== "off" || value) Services.prefs.setStringPref("still.search.ai", value);
-      lazy.StillShared.refreshSearchConfig?.().catch(console.error);
-      runCheck(value || detected);
+      field.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); field.blur(); } });
+      const edit = h("button", { type: "button", class: "settings-mini", text: "Endpoint" });
+      edit.addEventListener("click", () => { fieldRow.hidden = !fieldRow.hidden; if (!fieldRow.hidden) field.focus(); });
+      const modelRow = h("div", { class: "detail-row", hidden: !on }, h("span", { text: "Model" }), h("span", { class: "detail-end" }, model, edit));
+      const toggle = settingSwitch("AI summaries", "", on, (next) => {
+        Services.prefs.setStringPref("still.search.ai", next ? custom : "off");
+        lazy.StillShared.refreshSearchConfig?.().catch(console.error);
+        modelRow.hidden = !next;
+        if (!next) fieldRow.hidden = true;
+        else runCheck(endpoint);
+      });
+      if (!endpoint) toggle.disabled = true;
+      if (on) runCheck(endpoint);
+      return detailPanel(toggle, modelRow, fieldRow);
     };
-    field.addEventListener("change", saveEndpoint);
-    field.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); field.blur(); } });
-    const endpointRow = h("label", { class: "settings-row field-row" },
-      h("span", { class: "settings-copy" }, h("strong", { text: "Endpoint" }),
-        h("small", { text: "Any OpenAI-style server. Empty uses the GridAPI GridUI Desktop is signed in to." })),
-      field);
-    if (aiChoice !== "off") runCheck(endpoint);
+    const showEngineDetail = (id) => searchSlot.replaceChildren(...(id === "still" ? [stillSearchDetail()] : []));
+    showEngineDetail(engineId);
+    const engineGrid = pickGrid("Search engine", engines.map((engine) => ({ id: engine.id, name: engine.name, logo: engine.logo, color: ENGINE_COLORS[engine.id] })),
+      engineId, (id) => {
+        Services.prefs.setStringPref("still.search.engine", id);
+        lazy.StillShared.refreshSearchConfig?.().catch(console.error);
+        lazy.StillShared.setSearchEngine?.();
+        showEngineDetail(id);
+      });
 
-    // Side chat: which agent answers, and how Still talks to it.
-    let agents = [];
-    try { agents = ChromeUtils.importESModule("resource://still/StillChat.sys.mjs").StillChat.chatAgents(); } catch {}
+    // ---- side chat
+    const chat = window.StillChat;
+    const chatAgentsList = chat?.agents?.() || [];
     const chatId = Services.prefs.getStringPref("still.chat.agent", "codex");
-    const howRow = settingInfo("How it connects", "", { mono: true });
-    const describeChat = (id) => {
-      const agent = agents.find((candidate) => candidate.id === id) || agents[0];
-      if (!agent) return;
-      howRow.stillValue.textContent = agent.kind === "t3" ? `${agent.command || "t3"} thread · shows in T3 Code`
-        : `${[agent.command, ...(agent.args || [])].join(" ")} · Agent Client Protocol`;
+    const chatSlot = h("div");
+    const showChatDetail = (id) => {
+      const agent = chatAgentsList.find((candidate) => candidate.id === id);
+      if (!agent || !chat) { chatSlot.replaceChildren(); return; }
+      const body = h("div", { class: "detail-rows" });
+      const fill = (options) => {
+        const rows = options.map((choice) => {
+          const name = /model/i.test(choice.id) || /model/i.test(choice.name) ? "Model" : /effort|reason|thought/i.test(`${choice.id} ${choice.name}`) ? "Effort" : choice.name;
+          return choiceSelect(name, choice, chat.savedChoice(agent.id, choice.id), (value) => chat.applyChoice(agent.id, choice.id, value));
+        });
+        body.replaceChildren(...(rows.length ? rows : [h("p", { class: "detail-note", text: `${agent.name} offers no choices.` })]));
+      };
+      const known = chat.knownChoices(agent.id);
+      if (known.length) fill(known);
+      else {
+        body.replaceChildren(h("p", { class: "detail-note", text: `Asking ${agent.name} for its models…` }));
+        chat.loadChoices(agent.id).then((options) => { if (body.isConnected) fill(options); },
+          (error) => { if (body.isConnected) body.replaceChildren(h("p", { class: "detail-note", text: error.message || `${agent.name} did not answer.` })); });
+      }
+      chatSlot.replaceChildren(detailPanel(body));
     };
-    describeChat(chatId);
-    const chatRow = h("div", { class: "settings-row segmented-row" },
-      h("span", { class: "settings-copy" }, h("strong", { text: "Agent" }), h("small", { text: "Who answers in the side chat (Ctrl+E)" })),
-      segmented("Side chat agent", agents.map((agent) => [agent.id, agent.name]), chatId, (id) => {
-        Services.prefs.setStringPref("still.chat.agent", id);
-        describeChat(id);
-      }));
+    showChatDetail(chatId);
+    const chatGrid = pickGrid("Side chat agent", chatAgentsList.map((agent) => ({ id: agent.id, name: agent.name, logo: AGENT_LOGOS[agent.id]?.[0], color: AGENT_LOGOS[agent.id]?.[1],
+      title: agent.kind === "t3" ? `${agent.name}: runs as a T3 Code thread` : `${agent.name}: ${[agent.command, ...(agent.args || [])].join(" ")}` })),
+      chatId, (id) => { chat?.selectAgent(id); showChatDetail(id); });
 
-    // Agents: how outside agents reach Still, and who is connected.
+    // ---- button modes
+    const SHORT_MODE_NAMES = { permissions: "Permissions", browser: "Import", tabdock: "Dock slide", theme: "Theme" };
+    const modeTiles = toggleGrid("Button", utilityModes.map((mode) => ({ id: mode, name: SHORT_MODE_NAMES[mode] || utilityMeta[mode].label.replace(/ \(.*\)$/, ""),
+      node: icon(utilityMeta[mode].paths, utilityMeta[mode].className || ""), locked: mode === "settings", title: MODE_NOTES[mode] })),
+      (mode) => enabledUtilityModes().has(mode), (mode) => {
+        const modes = enabledUtilityModes();
+        if (modes.has(mode)) modes.delete(mode); else modes.add(mode);
+        setUtilityModes(modes);
+        return modes.has(mode);
+      });
+
+    // ---- theme
+    const theme = Services.prefs.getStringPref(PREF_THEME, "system");
+    const swatch = (a, b) => h("span", { class: "theme-swatch", style: `--a: ${a}; --b: ${b}` });
+    const themeGrid = pickGrid("Theme", [
+      { id: "system", name: "System", node: swatch("#f3f3f0", "#161716") },
+      { id: "light", name: "Light", node: swatch("#f3f3f0", "#f3f3f0") },
+      { id: "dark", name: "Dark", node: swatch("#202221", "#202221") },
+      { id: "oled", name: "OLED", node: swatch("#000", "#000") }
+    ], theme, (name) => { Services.prefs.setStringPref(PREF_THEME, name); applyTheme(name); }, { compact: true });
+
+    // ---- agents
     const connected = [...new Set(agentState.clients)];
+    const agentsOn = Services.prefs.getBoolPref("still.agent.enabled", true);
+    const agentDetail = h("div", { hidden: !agentsOn },
+      settingInfo("Connect with", "still mcp", { mono: true, copy: true }),
+      settingInfo("Connected", connected.length ? new Intl.ListFormat("en").format(connected) : "Nobody right now"),
+      settingSwitch("Live view", "A small picture when an agent works out of sight", agentViewEnabled(),
+        (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); }));
+
+    // ---- more
     const tab = gBrowser.selectedTab;
     const siteHost = (() => { try { return new URL(tabUrl(tab)).host; } catch { return ""; } })();
+    const more = h("div", { class: "settings-rows", hidden: true },
+      settingSwitch("Dock slide", "Pages slide when switching from the dock", dockSlideEnabled(), (on) => { Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on); renderUtilityButton(); }),
+      siteHost ? settingAction(`Permissions for ${siteHost}`, "", () => { hideSettings(); renderPermissions(); }) : null,
+      settingAction("Import from Opera GX", "Sign-ins", () => { hideSettings(); runImport("opera"); }),
+      settingAction("Import history from Opera GX", "", () => { hideSettings(); runHistoryImport(); }),
+      settingAction("Import from another browser", "Bookmarks, history, passwords", () => {
+        hideSettings();
+        try { lazy.MigrationUtils.showMigrationWizard(window, {}); } catch { showToast("Could not open the import window."); }
+      }));
+    const moreButton = h("button", { type: "button", class: "settings-more", "aria-expanded": "false" },
+      h("span", { text: "More" }), icon([["path", { d: "m7 10 5 5 5-5" }]], "settings-more-chevron"));
+    moreButton.addEventListener("click", () => {
+      more.hidden = !more.hidden;
+      moreButton.setAttribute("aria-expanded", String(!more.hidden));
+    });
+
     settingsBody.replaceChildren(
-      settingsSection("Button", "What the button beside the window controls switches between. Scroll on it to switch, click to open.",
-        ...utilityModes.map(buttonModeRow)),
-      settingsSection("Appearance", "", themeRow),
-      settingsSection("Search", "Results come from a private SearXNG on this computer; summaries from the endpoint below.",
-        settingInfo("Results", "SearXNG · 127.0.0.1:48230", { mono: true, note: "Searches never leave through a search company's account" }),
-        summaries, endpointRow, modelRow),
-      settingsSection("Side chat", "An agent beside the page that can read and use it, with Still's tools.",
-        chatRow, howRow),
-      settingsSection("Agents", "Coding agents use Still through its MCP server, with your sign-ins, in hidden tabs of their own.",
-        settingSwitch("Let agents use Still", "Turning this off disconnects every agent", Services.prefs.getBoolPref("still.agent.enabled", true), (on) => {
+      settingsGroup("Search", engineGrid, searchSlot),
+      settingsGroup("Side chat", chatGrid, chatSlot),
+      settingsGroup("Button", modeTiles),
+      settingsGroup("Theme", themeGrid),
+      settingsGroup("Agents", h("div", { class: "settings-rows" },
+        settingSwitch("Let agents use Still", "", agentsOn, (on) => {
           Services.prefs.setBoolPref("still.agent.enabled", on);
+          agentDetail.hidden = !on;
           if (!on) lazy.StillAgent.disconnectAll().catch(console.error);
-        }),
-        settingInfo("Connect an agent", "still mcp", { mono: true, copy: true, note: "Add this command as an MCP server in Claude Code, Codex or T3" }),
-        settingInfo("Connected now", connected.length ? new Intl.ListFormat("en").format(connected) : "None"),
-        settingSwitch("Live view", "A small live picture when an agent works in a tab you are not looking at",
-          agentViewEnabled(), (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); }),
-        settingInfo("Tidying up", "After 15 min unused", { note: "Agent tabs close on their own, and when their agent disconnects" })),
-      settingsSection("Slots", "",
-        settingSwitch("Dock slide", "Pages slide when you switch slots from the dock", dockSlideEnabled(), (on) => {
-          Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on);
-          renderUtilityButton();
-        })),
-      settingsSection("Sites and imports", "",
-        siteHost ? settingAction(`Permissions for ${siteHost}`, "Camera, microphone, location, notifications", () => { hideSettings(); renderPermissions(); }) : null,
-        settingAction("Import sign-ins from Opera GX", "Close Opera GX first", () => { hideSettings(); runImport("opera"); }),
-        settingAction("Import history from Opera GX", "Pages and site icons, so suggestions know your sites", () => { hideSettings(); runHistoryImport(); }),
-        settingAction("Import bookmarks, history and passwords", "From Opera GX, Chrome, Edge or a file", () => {
-          hideSettings();
-          try { lazy.MigrationUtils.showMigrationWizard(window, {}); } catch { showToast("Could not open the import window."); }
-        })));
+        }), agentDetail)),
+      h("section", { class: "settings-section" }, moreButton, more));
   }
 
-  function segmented(label, options, value, onChange) {
-    const group = h("div", { class: "settings-segmented", role: "radiogroup", "aria-label": label });
-    for (const [id, text] of options) {
-      const option = h("button", { type: "button", role: "radio", "aria-checked": String(id === value), text });
-      option.addEventListener("click", () => {
-        for (const other of group.children) other.setAttribute("aria-checked", String(other === option));
-        onChange(id);
-      });
-      group.append(option);
-    }
-    return group;
-  }
 
   const settingsState = { opener: null };
   function showSettings({ keyboard = false } = {}) {

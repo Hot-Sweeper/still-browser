@@ -54,12 +54,40 @@ async function gridApiServer() {
   return "";
 }
 
+// Where searches go. Still Search (the default) is Still's own results page
+// over the local SearXNG; the others send the query straight to that
+// engine. `builtin` is Firefox's own engine of that name, when it has one.
+const SEARCH_ENGINES = [
+  { id: "still", name: "Still Search", logo: "resource://still/still-mark.svg" },
+  { id: "searxng", name: "SearXNG", logo: "resource://still/logos/searxng.svg", url: `http://127.0.0.1:${48230}/search?q={q}` },
+  { id: "google", name: "Google", logo: "resource://still/logos/google.svg", url: "https://www.google.com/search?q={q}", builtin: "Google" },
+  { id: "duckduckgo", name: "DuckDuckGo", logo: "resource://still/logos/duckduckgo.svg", url: "https://duckduckgo.com/?q={q}", builtin: "DuckDuckGo" },
+  { id: "brave", name: "Brave", logo: "resource://still/logos/brave.svg", url: "https://search.brave.com/search?q={q}" },
+  { id: "bing", name: "Bing", logo: "resource://still/logos/bing.svg", url: "https://www.bing.com/search?q={q}", builtin: "Bing" },
+  { id: "ecosia", name: "Ecosia", logo: "resource://still/logos/ecosia.svg", url: "https://www.ecosia.org/search?q={q}", builtin: "Ecosia" },
+  { id: "startpage", name: "Startpage", logo: "resource://still/logos/startpage.svg", url: "https://www.startpage.com/do/search?q={q}" }
+];
+
+function searchEngine() {
+  const id = Services.prefs.getStringPref("still.search.engine", "still");
+  return SEARCH_ENGINES.find((engine) => engine.id === id) || SEARCH_ENGINES[0];
+}
+
+// The address a query goes to with the chosen engine, or "" for Still Search.
+function searchUrlFor(query) {
+  const engine = searchEngine();
+  return engine.url ? engine.url.replace("{q}", encodeURIComponent(query)) : "";
+}
+
 async function writeLocalConfig(dir) {
   const choice = Services.prefs.getStringPref("still.search.ai", "").trim();
   const aiEndpoint = choice === "off" ? "" : /^https?:\/\//.test(choice) ? choice : await gridApiServer();
   const file = dir.clone();
   file.append("local-config.json");
-  await IOUtils.writeJSON(file.path, { aiEndpoint: aiEndpoint ? aiEndpoint.replace(/\/*$/, "/") : "" });
+  await IOUtils.writeJSON(file.path, {
+    aiEndpoint: aiEndpoint ? aiEndpoint.replace(/\/*$/, "/") : "",
+    searchUrl: searchEngine().url || ""
+  });
 }
 
 // Still's page features (start page, YouTube, channel manager) ship as a
@@ -196,6 +224,7 @@ function installSearchRedirect() {
     const info = channel.loadInfo;
     if (info?.externalContentPolicyType !== Ci.nsIContentPolicy.TYPE_DOCUMENT) return;
     if (/[?&]format=json\b/.test(uri.spec)) return;
+    if (searchEngine().id === "searxng") return; // plain SearXNG was chosen
     const target = stillSearchUrl(uri);
     const browser = info.browsingContext?.top?.embedderElement;
     if (!target || !browser?.fixupAndLoadURIString) return;
@@ -467,18 +496,22 @@ async function runSearch(win) {
 
 // Still Search as Firefox's default engine (context menu "Search for...").
 // Set by Still itself, so no extension asks you to approve the change.
-let engineSet = false;
+// With another engine chosen in Settings, that engine (Firefox's own when it
+// has it) becomes the default instead.
 async function setSearchEngine() {
-  if (engineSet) return;
-  engineSet = true;
   try {
     const service = lazy.SearchService;
     await service.init();
-    let engine = service.getEngineByName("Still Search");
-    if (!engine) {
-      engine = await service.addUserEngine({ name: "Still Search", url: `http://127.0.0.1:${SEARCH_PORT}/search?q={searchTerms}` });
+    const chosen = searchEngine();
+    let engine = null;
+    if (chosen.url && chosen.id !== "searxng") {
+      engine = (chosen.builtin && service.getEngineByName(chosen.builtin)) || service.getEngineByName(chosen.name)
+        || await service.addUserEngine({ name: chosen.name, url: chosen.url.replace("{q}", "{searchTerms}") });
+    } else {
+      engine = service.getEngineByName("Still Search")
+        || await service.addUserEngine({ name: "Still Search", url: `http://127.0.0.1:${SEARCH_PORT}/search?q={searchTerms}` });
     }
-    if (service.defaultEngine?.name !== "Still Search") {
+    if (service.defaultEngine?.name !== engine.name) {
       await service.setDefault(engine, service.CHANGE_REASON.USER);
     }
   } catch (error) {
@@ -657,6 +690,10 @@ export const StillShared = {
   extensionReady,
   gridApiServer,
   refreshSearchConfig: () => writeLocalConfig(stillFile("extension")),
+  searchEngines: SEARCH_ENGINES,
+  searchEngine,
+  searchUrlFor,
+  setSearchEngine,
   faviconsFor: (urls) => faviconsFor(lazy.BrowserWindowTracker.getTopWindow(), urls),
   startWindowMove,
   cursorInWindow,
