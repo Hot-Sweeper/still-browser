@@ -3503,11 +3503,22 @@
     const caption = h("div", { class: "logo-caption" });
     const paint = (id) => {
       const item = items.find((candidate) => candidate.id === id);
-      caption.replaceChildren(h("span", { text: item?.name || "" }));
+      const label = h("span", { class: "logo-caption-inner" }, h("span", { text: item?.name || "" }));
+      caption.replaceChildren(label);
+      // The name glides to sit centred under the chosen logo.
+      const place = () => {
+        const chosen = row.querySelector('.logo-pick[aria-checked="true"]');
+        if (!chosen || !label.isConnected) return;
+        const box = chosen.getBoundingClientRect();
+        const center = box.left + box.width / 2 - caption.getBoundingClientRect().left;
+        const x = Math.max(0, Math.min(center - label.offsetWidth / 2, caption.clientWidth - label.offsetWidth));
+        caption.style.setProperty("--caption-x", `${Math.round(x)}px`);
+      };
+      requestAnimationFrame(place);
       if (item?.custom && onRemove) {
         const remove = h("button", { type: "button", class: "logo-remove", text: "Remove" });
         remove.addEventListener("click", () => onRemove(item.id));
-        caption.append(remove);
+        label.append(remove);
       }
     };
     for (const item of items) {
@@ -3518,7 +3529,6 @@
       button.addEventListener("click", () => {
         if (button.getAttribute("aria-checked") === "true") return;
         for (const other of row.querySelectorAll(".logo-pick")) other.setAttribute("aria-checked", String(other === button));
-        if (animationsAllowed()) button.animate([{ scale: ".8" }, { scale: "1.08" }, { scale: "1" }], { duration: 340, easing: "cubic-bezier(.23, 1, .32, 1)" });
         paint(item.id);
         onPick?.(item.id);
       });

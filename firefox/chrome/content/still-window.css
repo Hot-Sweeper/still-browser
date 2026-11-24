@@ -2377,12 +2377,12 @@
 #still-layer .settings-section h3 { color: var(--still-muted); font-size: 13px; font-weight: 650; }
 #still-layer .settings-row[hidden] { display: none; }
 .settings-block { display: grid; gap: 12px; }
-.logo-picker { display: grid; gap: 6px; padding: 0 4px; }
-.logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.logo-picker { display: grid; gap: 8px; }
+.logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: -6px; }
 #still-layer :is(.logo-pick, .logo-add) {
   position: relative;
-  width: 46px;
-  height: 46px;
+  width: 50px;
+  height: 50px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -2393,28 +2393,18 @@
   cursor: pointer;
 }
 #still-layer .logo-pick > * {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   object-fit: contain;
   filter: grayscale(1);
-  opacity: .38;
+  opacity: .36;
   -moz-context-properties: fill;
   fill: currentColor;
-  transition: filter 220ms var(--still-ease-out), opacity 220ms var(--still-ease-out), scale 220ms var(--still-ease-out-strong);
+  transition: filter 220ms var(--still-ease-out), opacity 220ms var(--still-ease-out), scale 320ms var(--still-ease-spring);
 }
 #still-layer .logo-pick:hover > * { opacity: .7; }
-#still-layer .logo-pick[aria-checked="true"] > * { filter: none; opacity: 1; scale: 1.08; }
-#still-layer .logo-pick[aria-checked="true"]::after {
-  content: "";
-  position: absolute;
-  bottom: 1px;
-  left: 50%;
-  width: 4px;
-  height: 4px;
-  margin-left: -2px;
-  border-radius: 50%;
-  background: currentColor;
-}
+/* The chosen logo grows and takes its color; nothing else marks it. */
+#still-layer .logo-pick[aria-checked="true"] > * { filter: none; opacity: 1; scale: 1.36; }
 #still-layer :is(.logo-pick, .logo-add):focus-visible { outline: 2px solid color-mix(in srgb, var(--still-accent) 70%, transparent); outline-offset: -2px; }
 #still-layer .logo-add { color: var(--still-muted); }
 #still-layer .logo-add svg { width: 20px; height: 20px; opacity: .6; transition: opacity 160ms var(--still-ease-out), rotate 240ms var(--still-ease-out-strong); }
@@ -2427,7 +2417,15 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--still-text) 14%, transparent);
 }
-.logo-caption { display: flex; align-items: center; gap: 10px; min-height: 20px; padding-left: 13px; font-size: 13px; font-weight: 600; }
+.logo-caption { position: relative; min-height: 20px; margin-left: -6px; font-size: 14px; font-weight: 600; }
+.logo-caption-inner {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+  transform: translateX(var(--caption-x, 0px));
+  transition: transform 300ms var(--still-ease-out-strong);
+}
 #still-layer .logo-remove { padding: 0; color: var(--still-muted); font: inherit; font-size: 12.5px; font-weight: 500; background: none; border: 0; cursor: pointer; }
 #still-layer .logo-remove:hover { color: #e06060; }
 .theme-swatch {
@@ -2436,7 +2434,7 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--still-text) 30%, transparent);
 }
 #still-layer .logo-pick .theme-swatch { filter: none; opacity: .55; }
-#still-layer .logo-pick[aria-checked="true"] .theme-swatch { opacity: 1; box-shadow: 0 0 0 2px var(--still-text); }
+#still-layer .logo-pick[aria-checked="true"] .theme-swatch { opacity: 1; box-shadow: 0 0 0 1.5px var(--still-text); }
 .logo-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 4px; }
 #still-layer .logo-form .settings-field { flex: 1 1 200px; width: auto; }
 .logo-form-actions { display: flex; gap: 6px; margin-left: auto; }
