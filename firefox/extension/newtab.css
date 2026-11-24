@@ -870,3 +870,15 @@ html[data-category="images"] .results-layout { margin-left: 0; }
 }
 .summary-ask::placeholder { color: var(--muted); }
 .summary[aria-busy="true"] .summary-ask { opacity: .6; }
+.summary-retry {
+  margin-left: 4px;
+  padding: 3px 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  background: var(--hover);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.summary-retry:hover { background: color-mix(in srgb, var(--text) 12%, transparent); }

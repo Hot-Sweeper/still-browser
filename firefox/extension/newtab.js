@@ -709,7 +709,7 @@ async function streamChat(endpoint, messages, signal, onText) {
     headers: { 'Content-Type': 'application/json', 'X-GridAPI-Project': 'Still', 'X-GridAPI-Title': 'Search summary' },
     body: JSON.stringify({ messages, stream: true, max_tokens: 400, temperature: 0.3 })
   });
-  if (!response.ok || !response.body) throw new Error(`status ${response.status}`);
+  if (!response.ok || !response.body) throw Object.assign(new Error(`status ${response.status}`), { status: response.status });
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -738,22 +738,53 @@ function summaryTurn(question) {
   return { node: el('div', { class: 'summary-turn' }, question ? el('p', { class: 'summary-question', text: question }) : null, body), body };
 }
 
+// GridAPI shares one GPU, so a request can fail while it is busy or still
+// loading the model. Up to three tries, a little apart, before saying so;
+// the error names the reason and offers to try again.
+const SUMMARY_RETRIES = [0, 1500, 4000];
+
+function failureReason(error) {
+  if (error?.status) return `answered with error ${error.status}`;
+  if (error?.message === 'empty') return 'sent back an empty answer';
+  return 'could not be reached';
+}
+
 async function runTurn(state, turn, endpoint) {
   const { sources } = state;
-  try {
-    const text = await streamChat(endpoint, state.messages, state.signal, (partial) => turn.body.replaceChildren(...citedText(partial, sources)));
-    if (!text.trim()) throw new Error('empty');
-    turn.body.replaceChildren(...citedText(text, sources));
-    requestIcons(turn.body);
-    state.messages.push({ role: 'assistant', content: text });
-    state.turns.push({ question: turn.question || '', text });
-    return true;
-  } catch (error) {
-    if (turn.question) state.messages.pop();
+  let failure = null;
+  for (const delay of SUMMARY_RETRIES) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     if (state.signal.aborted) return false;
-    turn.body.replaceChildren(el('span', { class: 'summary-error', text: 'Your GridAPI did not answer, so there is no summary. It may be busy with another job.' }));
-    return false;
+    let streamed = false;
+    try {
+      const text = await streamChat(endpoint, state.messages, state.signal, (partial) => {
+        streamed = true;
+        turn.body.replaceChildren(...citedText(partial, sources));
+      });
+      if (!text.trim()) throw new Error('empty');
+      turn.body.replaceChildren(...citedText(text, sources));
+      requestIcons(turn.body);
+      state.messages.push({ role: 'assistant', content: text });
+      state.turns.push({ question: turn.question || '', text });
+      return true;
+    } catch (error) {
+      if (state.signal.aborted) { if (turn.question) state.messages.pop(); return false; }
+      console.warn('Still Search summary failed', error);
+      failure = error;
+      if (streamed) break;
+    }
   }
+  const retry = el('button', { type: 'button', class: 'summary-retry', text: 'Try again' });
+  turn.body.replaceChildren(el('span', { class: 'summary-error', text: `No summary: your GridAPI ${failureReason(failure)}. ` }), retry);
+  retry.addEventListener('click', async () => {
+    turn.body.replaceChildren(el('span', { class: 'summary-wait', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')));
+    const block = turn.node.closest('.summary');
+    block?.setAttribute('aria-busy', 'true');
+    const ok = await runTurn(state, turn, endpoint);
+    block?.setAttribute('aria-busy', 'false');
+    if (ok) block?.querySelector('.summary-follow')?.removeAttribute('hidden');
+  });
+  return false;
 }
 
 async function renderSummary(data, query) {
