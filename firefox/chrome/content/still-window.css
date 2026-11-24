@@ -2442,3 +2442,70 @@
 #still-layer .settings-select { max-width: 60%; }
 #still-layer .settings-select { width: auto; min-width: 150px; max-width: 300px; }
 #still-layer .settings-value.mono { white-space: nowrap; overflow-wrap: normal; text-overflow: ellipsis; max-width: 360px; }
+
+/* A harness row inside a chat agent (T3 Code): the same bare logos, smaller. */
+.logo-picker.small { margin: 2px 0 10px; }
+#still-layer .logo-picker.small :is(.logo-pick, .logo-add) { width: 40px; height: 40px; }
+#still-layer .logo-picker.small .logo-pick > * { width: 20px; height: 20px; }
+.logo-picker.small .logo-caption { font-size: 13px; }
+
+/* Reasoning slider: a soft track filled up to the chosen stop, a round
+   thumb, and the level names beneath (the chosen one bright). */
+#still-layer .settings-row.slider-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px 14px 8px; cursor: default; }
+#still-layer .settings-row.slider-row:hover { background: transparent; }
+.slider-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.slider-head strong { font-size: 14px; font-weight: 600; }
+.slider-head .settings-value { color: var(--still-text); font-weight: 600; }
+.effort-track { display: grid; gap: 4px; }
+#still-layer .effort-range {
+  --p: 0;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+}
+#still-layer .effort-range::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--still-text) 12%, transparent);
+}
+#still-layer .effort-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(var(--still-agent-rgb));
+}
+#still-layer .effort-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35), 0 0 0 4px color-mix(in srgb, rgb(var(--still-agent-rgb)) 22%, transparent);
+  transition: scale 160ms var(--still-ease-out-strong);
+}
+#still-layer .effort-range:active::-moz-range-thumb { scale: 1.15; }
+#still-layer .effort-range:focus-visible { outline: none; }
+#still-layer .effort-range:focus-visible::-moz-range-thumb { box-shadow: 0 1px 4px rgba(0, 0, 0, .35), 0 0 0 4px color-mix(in srgb, var(--still-accent) 60%, transparent); }
+/* Each name sits centred under its stop (the thumb travels 9px in from
+   either end). */
+.effort-ticks { position: relative; height: 20px; margin: 0 9px; }
+#still-layer .effort-ticks button {
+  position: absolute;
+  top: 0;
+  left: calc(var(--at) * 100%);
+  translate: -50% 0;
+  padding: 2px 4px;
+  color: var(--still-muted);
+  font: inherit;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 140ms var(--still-ease-out);
+}
+#still-layer .effort-ticks button:hover { color: var(--still-text); }
+#still-layer .effort-ticks button.on { color: var(--still-text); font-weight: 650; }

@@ -250,6 +250,8 @@ browser.runtime.onMessage.addListener((message, sender) => {
   if (message?.type === 'youtube-ready' && sender.tab?.id && YOUTUBE_URL.test(sender.url || '')) return refreshTab(sender.tab.id, sender.url);
   if (message?.type === 'open-manager') return browser.runtime.openOptionsPage();
   if (message?.type === 'get-catalog') return currentChannels();
+  // The summary endpoint for Still's SearXNG pages (searxng-summary.js).
+  if (message?.type === 'local-config') return fetch('local-config.json', { cache: 'no-store' }).then((response) => (response.ok ? response.json() : {})).catch(() => ({}));
   if (message?.type === 'history-search' && typeof message.text === 'string') {
     return browser.history.search({ text: message.text.slice(0, 200), startTime: 0, maxResults: 60 });
   }

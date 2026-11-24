@@ -73,6 +73,18 @@
       ],
       "world": "MAIN",
       "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "http://127.0.0.1/search*"
+      ],
+      "js": [
+        "searxng-summary.js"
+      ],
+      "css": [
+        "searxng-summary.css"
+      ],
+      "run_at": "document_end"
     }
   ],
   "action": {

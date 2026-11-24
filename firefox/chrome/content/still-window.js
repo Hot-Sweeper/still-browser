@@ -3497,8 +3497,8 @@
   // Bare logos in a row. The others rest grey and faint; the chosen one is
   // in full color, its name beneath. "+" adds your own; a custom one can be
   // removed from under its name.
-  function logoRow(label, items, value, { onPick, onAdd, onRemove } = {}) {
-    const wrap = h("div", { class: "logo-picker" });
+  function logoRow(label, items, value, { onPick, onAdd, onRemove, small = false } = {}) {
+    const wrap = h("div", { class: `logo-picker${small ? " small" : ""}` });
     const row = h("div", { class: "logo-row", role: "radiogroup", "aria-label": label });
     const caption = h("div", { class: "logo-caption" });
     const paint = (id) => {
@@ -3576,6 +3576,57 @@
     return h("label", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("strong", { text: label })), select);
   }
 
+  const HARNESS_LOGOS = { codex: "resource://still/logos/openai.svg", claudeAgent: "resource://still/logos/claude.svg", antigravity: "resource://still/logos/gemini.svg", gemini: "resource://still/logos/gemini.svg" };
+
+  // A choice of two where one is the plain default (off/on, Standard/Fast)
+  // reads better as a switch, named after what turning it on does.
+  function switchPair(choice) {
+    if (choice.values.length !== 2) return null;
+    const [a, b] = choice.values;
+    const offWord = /^(off|false|default|standard)$/i;
+    const off = offWord.test(a.value) || a.isDefault ? a : offWord.test(b.value) || b.isDefault ? b : null;
+    if (!off) return null;
+    const on = off === a ? b : a;
+    const plain = /^(on|true)$/i.test(on.value);
+    const label = plain ? choice.name : /fast|priority/i.test(`${on.value} ${on.name}`) ? "Fast mode" : on.name;
+    return { on: on.value, off: off.value, label, note: on.description || choice.description || "" };
+  }
+
+  // Reasoning as a slider: one stop per level, the names beneath, the
+  // chosen one bright. Dragging previews; letting go applies.
+  function effortSlider(label, choice, value, onChange) {
+    const values = choice.values;
+    const short = (name) => name.replace(/^Default.*$/i, "Auto").replace(/^Extra High$/i, "XHigh");
+    let index = Math.max(0, values.findIndex((item) => item.value === value));
+    const range = h("input", { type: "range", class: "effort-range", min: "0", max: String(values.length - 1), step: "1", value: String(index), "aria-label": label });
+    const shown = h("span", { class: "settings-value" });
+    const ticks = h("div", { class: "effort-ticks" }, ...values.map((item, i) => {
+      const tick = h("button", { type: "button", tabindex: "-1", text: short(item.name), title: item.description || item.name });
+      tick.style.setProperty("--at", values.length > 1 ? String(i / (values.length - 1)) : "0");
+      tick.addEventListener("click", () => { range.value = String(i); paint(); commit(); });
+      return tick;
+    }));
+    const paint = () => {
+      const i = Number(range.value);
+      range.style.setProperty("--p", values.length > 1 ? String(i / (values.length - 1)) : "0");
+      shown.textContent = values[i].name;
+      range.setAttribute("aria-valuetext", values[i].name);
+      [...ticks.children].forEach((tick, n) => tick.classList.toggle("on", n === i));
+    };
+    const commit = () => {
+      const i = Number(range.value);
+      if (i === index) return;
+      index = i;
+      onChange(values[i].value);
+    };
+    range.addEventListener("input", paint);
+    range.addEventListener("change", commit);
+    paint();
+    return h("div", { class: "settings-row slider-row" },
+      h("span", { class: "slider-head" }, h("strong", { text: label }), shown),
+      h("div", { class: "effort-track" }, range, ticks));
+  }
+
   const AGENT_LOGOS = { codex: "resource://still/logos/openai.svg", claude: "resource://still/logos/claude.svg", t3: "resource://still/logos/t3.png" };
 
   function settingsGroup(title, ...children) {
@@ -3633,7 +3684,8 @@
     const renderSearch = () => {
       const engines = lazy.StillShared.searchEngines || [];
       const chosen = lazy.StillShared.searchEngine?.().id || "still";
-      const extra = () => searchExtra.replaceChildren(...((lazy.StillShared.searchEngine?.().id || "still") === "still" ? [summaryRows()] : []));
+      // Summaries exist for Still Search and for SearXNG's own pages.
+      const extra = () => searchExtra.replaceChildren(...(["still", "searxng"].includes(lazy.StillShared.searchEngine?.().id || "still") ? [summaryRows()] : []));
       const applyEngine = (id) => {
         Services.prefs.setStringPref("still.search.engine", id);
         lazy.StillShared.refreshSearchConfig?.().catch(console.error);
@@ -3677,30 +3729,31 @@
         const agent = agents.find((candidate) => candidate.id === id);
         if (!agent || !chat) { chatExtra.replaceChildren(); return; }
         const rows = h("div", { class: "settings-rows" });
-        // The agent's own options, in a steady order: model, effort, its
-        // on/off switches (fast mode and the like), then its permission mode.
-        const ORDER = { model: 0, thought_level: 1, model_config: 2, mode: 3 };
-        const isSwitch = (choice) => {
-          const values = choice.values.map((item) => String(item.value).toLowerCase()).sort().join(",");
-          return values === "off,on" || values === "false,true";
-        };
-        const fill = (options) => rows.replaceChildren(...[...options]
-          .sort((a, b) => (ORDER[a.category] ?? 4) - (ORDER[b.category] ?? 4))
-          .map((choice) => {
-            const name = choice.category === "model" ? "Model" : choice.category === "thought_level" ? "Effort" : choice.name;
+        const harnessSlot = h("div");
+        // The agent's own options, in a steady order: which harness (T3),
+        // model, reasoning as a slider, speed and other switches, then mode.
+        const ORDER = { harness: -1, model: 0, thought_level: 1, model_config: 2, mode: 3 };
+        const reload = () => chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); }, () => {});
+        const fill = (options) => {
+          const sorted = [...options].filter((choice) => choice.values.length > 1).sort((a, b) => (ORDER[a.category] ?? 4) - (ORDER[b.category] ?? 4));
+          const harness = sorted.find((choice) => choice.category === "harness");
+          harnessSlot.replaceChildren(...(harness ? [logoRow("Harness", harness.values.map((item) => ({ id: item.value, name: item.name, logo: HARNESS_LOGOS[item.value] || "" })),
+            harness.values.some((item) => item.value === chat.savedChoice(agent.id, harness.id)) ? chat.savedChoice(agent.id, harness.id) : harness.value,
+            { small: true, onPick: (id) => { chat.applyChoice(agent.id, harness.id, id); reload(); } })] : []));
+          rows.replaceChildren(...sorted.filter((choice) => choice !== harness).map((choice) => {
             const saved = chat.savedChoice(agent.id, choice.id);
-            if (isSwitch(choice)) {
-              const onValue = choice.values.find((item) => /^(on|true)$/i.test(item.value)).value;
-              const offValue = choice.values.find((item) => /^(off|false)$/i.test(item.value)).value;
-              const current = choice.values.some((item) => item.value === saved) ? saved : choice.value;
-              return settingSwitch(name, choice.description || "", current === onValue, (on) => chat.applyChoice(agent.id, choice.id, on ? onValue : offValue));
-            }
-            return choiceSelect(name, choice, saved, (value) => {
+            const current = choice.values.some((item) => item.value === saved) ? saved : choice.value;
+            const apply = (value) => {
               chat.applyChoice(agent.id, choice.id, value);
               // T3's options belong to the model: show the new model's own.
-              if (agent.kind === "t3" && choice.category === "model") chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); }, () => {});
-            });
+              if (agent.kind === "t3" && choice.category === "model") reload();
+            };
+            if (choice.category === "thought_level") return effortSlider("Reasoning", choice, current, apply);
+            const pair = switchPair(choice);
+            if (pair) return settingSwitch(pair.label, pair.note, current === pair.on, (on) => apply(on ? pair.on : pair.off));
+            return choiceSelect(choice.category === "model" ? "Model" : choice.name, choice, current, apply);
           }));
+        };
         const known = chat.knownChoices(agent.id);
         if (known.length) fill(known);
         else rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: `Asking ${agent.name} what it offers…` }))));
@@ -3709,7 +3762,7 @@
           chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); },
             (error) => { if (rows.isConnected && !known.length) rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: error.message || `${agent.name} did not answer.` })))); });
         }
-        chatExtra.replaceChildren(rows);
+        chatExtra.replaceChildren(harnessSlot, rows);
       };
       const items = agents.map((agent) => {
         let logo = AGENT_LOGOS[agent.id] || "";
