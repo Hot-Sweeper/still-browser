@@ -1797,15 +1797,17 @@
    the plus a quarter. */
 #still-chrome .slot.empty {
   gap: 6px;
-  color: rgba(255, 255, 255, .8);
-  background: rgba(255, 255, 255, .05);
-  border: 1px dashed rgba(255, 255, 255, .38);
+  color: rgba(255, 255, 255, .3);
+  background: none;
+  border: 1px dashed rgba(255, 255, 255, .12);
   box-shadow: none;
+  transition: color 150ms var(--still-ease-out), background-color 150ms var(--still-ease-out),
+    border-color 150ms var(--still-ease-out);
 }
 #still-chrome .slot.empty:is(:hover, :focus-visible) {
-  color: #fff;
-  background: rgba(255, 255, 255, .11);
-  border-color: rgba(255, 255, 255, .6);
+  color: rgba(255, 255, 255, .75);
+  background: rgba(255, 255, 255, .05);
+  border-color: rgba(255, 255, 255, .3);
 }
 #still-layer .slot-empty-plus {
   width: 15px;
@@ -2490,47 +2492,63 @@
 .icon-select-wrap { position: relative; }
 #still-layer .icon-select {
   height: 34px;
+  max-width: 300px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 8px 0 10px;
+  padding: 0 6px 0 10px;
   color: var(--still-text);
   font: inherit;
   font-size: 13px;
   font-weight: 560;
-  background: color-mix(in srgb, var(--still-text) 8%, transparent);
+  background: transparent;
   border: 0;
   border-radius: 9px;
   cursor: pointer;
   transition: background-color 120ms var(--still-ease-out);
 }
-#still-layer .icon-select:hover, #still-layer .icon-select[aria-expanded="true"] { background: color-mix(in srgb, var(--still-text) 13%, transparent); }
-.icon-select-face { display: inline-flex; align-items: center; gap: 8px; }
-#still-layer :is(.icon-select-face, .icon-select-option) img { width: 18px; height: 18px; object-fit: contain; -moz-context-properties: fill; fill: currentColor; }
-#still-layer :is(.icon-select-face, .icon-select-option) .logo-letter { width: 18px; height: 18px; font-size: 11px; border-radius: 5px; }
-#still-layer .icon-select-chevron { width: 15px; height: 15px; color: var(--still-muted); transition: rotate 200ms var(--still-ease-out-strong); }
-#still-layer .icon-select[aria-expanded="true"] .icon-select-chevron { rotate: 180deg; }
-.icon-select-list {
+#still-layer .icon-select:is(:hover, :focus-visible, [aria-expanded="true"]) { background: color-mix(in srgb, var(--still-text) 8%, transparent); outline: none; }
+.icon-select-face { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.icon-select-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#still-layer :is(.icon-select-face, .icon-select-option) img { width: 18px; height: 18px; flex: 0 0 18px; object-fit: contain; -moz-context-properties: fill; fill: currentColor; }
+#still-layer :is(.icon-select-face, .icon-select-option) .logo-letter { width: 18px; height: 18px; flex: 0 0 18px; font-size: 11px; border-radius: 5px; }
+#still-layer .icon-select-chevron { width: 15px; height: 15px; flex: 0 0 15px; color: var(--still-muted); }
+
+/* The menu itself: a solid sheet over the page, its highlight gliding to
+   the item under the pointer. */
+.icon-select-menu {
   position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 5;
-  min-width: 210px;
-  display: grid;
-  gap: 2px;
+  right: -5px;
+  z-index: 6;
+  width: max-content;
+  min-width: calc(100% + 10px);
+  max-width: 340px;
   padding: 5px;
-  background: color-mix(in srgb, var(--still-text) 7%, var(--still-download-bg));
-  border: 1px solid var(--still-line);
-  border-radius: 12px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .32);
-  transform-origin: top right;
+  background: color-mix(in srgb, var(--still-text) 6%, var(--still-download-bg));
+  border: 1px solid color-mix(in srgb, var(--still-text) 12%, transparent);
+  border-radius: 13px;
+  box-shadow: 0 18px 44px -8px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .18);
 }
-.icon-select-list[hidden] { display: none; }
+.icon-select-menu[hidden] { display: none; }
+.icon-select-list { position: relative; display: grid; gap: 1px; max-height: 330px; overflow: auto; scrollbar-width: thin; overscroll-behavior: contain; }
+.icon-select-highlight {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  right: 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--still-text) 9%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 160ms var(--still-ease-out-strong), height 160ms var(--still-ease-out-strong), opacity 120ms var(--still-ease-out);
+}
 #still-layer .icon-select-option {
+  position: relative;
+  min-height: 36px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   color: var(--still-text);
   font: inherit;
   font-size: 13px;
@@ -2539,6 +2557,11 @@
   border: 0;
   border-radius: 8px;
   cursor: pointer;
+  outline: none;
 }
-#still-layer .icon-select-option:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--still-text) 9%, transparent); outline: none; }
-#still-layer .icon-select-option[aria-selected="true"] { font-weight: 650; }
+.icon-select-text { min-width: 0; flex: 1 1 auto; display: grid; gap: 1px; }
+.icon-select-option .icon-select-name { font-weight: 560; }
+#still-layer .icon-select-option small { overflow: hidden; color: var(--still-muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+#still-layer .icon-select-check { width: 16px; height: 16px; flex: 0 0 16px; color: var(--still-text); stroke-width: 2.2; opacity: 0; }
+#still-layer .icon-select-option[aria-selected="true"] .icon-select-check { opacity: 1; }
+#still-layer .icon-select-option[aria-selected="true"] .icon-select-name { font-weight: 650; }

@@ -3670,55 +3670,96 @@
       bars);
   }
 
-  // A dropdown whose choices carry icons (native selects cannot): the
-  // chosen one shows on the button; the list opens beneath it.
+  // A popup menu in the manner of the system's own: it opens over its
+  // button with the chosen item lined up where you clicked (long lists open
+  // beneath and scroll to it), a soft highlight glides between items, the
+  // chosen one carries a check. Items may have an icon and a second line.
   function iconSelect(label, items, value, onPick) {
     let current = items.find((item) => item.id === value) || items[0];
     const face = h("span", { class: "icon-select-face" });
     const button = h("button", { type: "button", class: "icon-select", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-label": label },
-      face, icon([["path", { d: "m7 10 5 5 5-5" }]], "icon-select-chevron"));
-    const list = h("div", { class: "icon-select-list", role: "listbox", hidden: true });
-    const glyph = (item) => item.logo ? h("img", { src: item.logo, alt: "" }) : h("span", { class: "logo-letter", text: item.name[0] });
-    const paintFace = () => face.replaceChildren(glyph(current), h("span", { text: current.name }));
+      face, icon([["path", { d: "m8.5 9.5 3.5-3.5 3.5 3.5M8.5 14.5l3.5 3.5 3.5-3.5" }]], "icon-select-chevron"));
+    const highlight = h("span", { class: "icon-select-highlight", "aria-hidden": "true" });
+    const list = h("div", { class: "icon-select-list", role: "listbox", "aria-label": label });
+    const menu = h("div", { class: "icon-select-menu", hidden: true }, highlight, list);
+    const glyph = (item) => item.logo ? h("img", { src: item.logo, alt: "" })
+      : item.logo === undefined ? null : h("span", { class: "logo-letter", text: item.name[0] });
+    const paintFace = () => face.replaceChildren(...[glyph(current), h("span", { class: "icon-select-name", text: current.name })].filter(Boolean));
+    const glide = (option) => {
+      if (!option) { highlight.style.opacity = "0"; return; }
+      highlight.style.opacity = "1";
+      highlight.style.transform = `translateY(${option.offsetTop - list.scrollTop}px)`;
+      highlight.style.height = `${option.offsetHeight}px`;
+    };
     const close = () => {
-      if (list.hidden) return;
-      list.hidden = true;
+      if (menu.hidden) return;
       button.setAttribute("aria-expanded", "false");
       document.removeEventListener("pointerdown", outside, true);
+      const done = () => { menu.hidden = true; };
+      if (animationsAllowed()) menu.animate([{ opacity: 1 }, { opacity: 0, transform: "scale(.98)" }], { duration: 110, easing: "cubic-bezier(.42, 0, 1, 1)" }).finished.then(done, done);
+      else done();
     };
-    const outside = (event) => { if (!list.contains(event.target) && !button.contains(event.target)) close(); };
+    const outside = (event) => { if (!menu.contains(event.target) && !button.contains(event.target)) close(); };
+    const choose = (item) => {
+      close();
+      button.focus();
+      if (item.id === current.id) return;
+      current = item;
+      paintFace();
+      onPick(item.id);
+    };
     const open = () => {
       list.replaceChildren(...items.map((item) => {
         const option = h("button", { type: "button", class: "icon-select-option", role: "option", "aria-selected": String(item.id === current.id) },
-          glyph(item), h("span", { text: item.name }));
-        option.addEventListener("click", () => {
-          close();
-          button.focus();
-          if (item.id === current.id) return;
-          current = item;
-          paintFace();
-          onPick(item.id);
-        });
+          ...[glyph(item), h("span", { class: "icon-select-text" }, h("span", { class: "icon-select-name", text: item.name }),
+            item.description ? h("small", { text: item.description }) : null),
+          icon([["path", { d: "m6.5 12.5 3.5 3.5 7.5-8" }]], "icon-select-check")].filter(Boolean));
+        option.addEventListener("click", () => choose(item));
+        option.addEventListener("pointerenter", () => glide(option));
+        option.addEventListener("focus", () => glide(option));
         return option;
       }));
-      list.hidden = false;
+      menu.hidden = false;
       button.setAttribute("aria-expanded", "true");
-      if (animationsAllowed()) list.animate([{ opacity: 0, transform: "translateY(-4px) scale(.98)" }, { opacity: 1, transform: "none" }], { duration: 160, easing: "cubic-bezier(0, 0, .58, 1)" });
-      list.querySelector('[aria-selected="true"]')?.focus();
+      const chosen = list.querySelector('[aria-selected="true"]') || list.firstElementChild;
+      // Short lists sit over the button, the chosen item where the button
+      // is; long ones open beneath it, scrolled to the chosen item.
+      const long = items.length > 7;
+      menu.classList.toggle("below", long);
+      if (long) {
+        menu.style.top = `calc(100% + 6px)`;
+        list.scrollTop = Math.max(0, chosen.offsetTop - list.clientHeight / 2 + chosen.offsetHeight / 2);
+      } else {
+        menu.style.top = `${button.offsetHeight / 2 - (chosen.offsetTop + chosen.offsetHeight / 2) - 5}px`;
+      }
+      menu.style.transformOrigin = `right ${chosen.offsetTop + chosen.offsetHeight / 2}px`;
+      glide(chosen);
+      if (animationsAllowed()) menu.animate([{ opacity: 0, transform: "scale(.96)" }, { opacity: 1, transform: "none" }], { duration: 170, easing: "cubic-bezier(.23, 1, .32, 1)" });
+      chosen.focus({ preventScroll: true });
       document.addEventListener("pointerdown", outside, true);
     };
-    button.addEventListener("click", () => (list.hidden ? open() : close()));
-    list.addEventListener("keydown", (event) => {
+    button.addEventListener("click", () => (menu.hidden ? open() : close()));
+    button.addEventListener("keydown", (event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); open(); } });
+    list.addEventListener("scroll", () => glide(list.querySelector(".icon-select-option:hover, .icon-select-option:focus")));
+    list.addEventListener("pointerleave", () => glide(list.querySelector(".icon-select-option:focus")));
+    menu.addEventListener("keydown", (event) => {
       const options = [...list.children];
       const at = options.indexOf(document.activeElement);
       if (event.key === "ArrowDown") { event.preventDefault(); options[Math.min(options.length - 1, at + 1)]?.focus(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); options[Math.max(0, at - 1)]?.focus(); }
-      else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); button.focus(); }
+      else if (event.key === "Home") { event.preventDefault(); options[0]?.focus(); }
+      else if (event.key === "End") { event.preventDefault(); options.at(-1)?.focus(); }
+      else if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); event.stopPropagation(); close(); button.focus(); }
+      else if (event.key.length === 1 && /\S/.test(event.key)) {
+        const next = options.find((option, n) => n > at && option.textContent.toLowerCase().startsWith(event.key.toLowerCase()))
+          || options.find((option) => option.textContent.toLowerCase().startsWith(event.key.toLowerCase()));
+        next?.focus();
+      }
     });
     paintFace();
     return h("div", { class: "settings-row info icon-select-row" },
       h("span", { class: "settings-copy" }, h("strong", { text: label })),
-      h("span", { class: "icon-select-wrap" }, button, list));
+      h("span", { class: "icon-select-wrap" }, button, menu));
   }
 
   const AGENT_LOGOS = { codex: "resource://still/logos/openai.svg", claude: "resource://still/logos/claude.svg", t3: "resource://still/logos/t3.png" };
@@ -3830,7 +3871,7 @@
         const fill = (options) => {
           const sorted = [...options].filter((choice) => choice.values.length > 1).sort((a, b) => (ORDER[a.category] ?? 4) - (ORDER[b.category] ?? 4));
           const harness = sorted.find((choice) => choice.category === "harness");
-          const harnessRow = harness ? iconSelect("Harness", harness.values.map((item) => ({ id: item.value, name: item.name, logo: HARNESS_LOGOS[item.value] || "" })),
+          const harnessRow = harness ? iconSelect("Harness", harness.values.map((item) => ({ id: item.value, name: item.name, description: item.description || "", logo: HARNESS_LOGOS[item.value] || "" })),
             harness.values.some((item) => item.value === chat.savedChoice(agent.id, harness.id)) ? chat.savedChoice(agent.id, harness.id) : harness.value,
             (id) => { chat.applyChoice(agent.id, harness.id, id); reload(); }) : null;
           rows.replaceChildren(...(harnessRow ? [harnessRow] : []), ...sorted.filter((choice) => choice !== harness).map((choice) => {
@@ -3844,7 +3885,8 @@
             if (choice.category === "thought_level") return effortSlider("Reasoning", choice, current, apply);
             const pair = switchPair(choice);
             if (pair) return settingSwitch(pair.label, pair.note, current === pair.on, (on) => apply(on ? pair.on : pair.off));
-            return choiceSelect(choice.category === "model" ? "Model" : choice.name, choice, current, apply);
+            return iconSelect(choice.category === "model" ? "Model" : choice.name,
+              choice.values.map((item) => ({ id: item.value, name: item.name, description: item.description || "", logo: undefined })), current, apply);
           }));
         };
         const known = chat.knownChoices(agent.id);

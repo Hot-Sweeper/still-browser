@@ -423,7 +423,8 @@ export class T3Chat {
         const data = await IOUtils.readJSON(path);
         if (!data?.enabled || !data.installed || data.status !== "ready" || !data.models?.length) continue;
         const id = PathUtils.filename(path).replace(/\.json$/, "");
-        providers.set(id, { name: data.displayName || PROVIDER_NAMES[id] || id, models: data.models.filter((model) => model.slug) });
+        providers.set(id, { name: data.displayName || PROVIDER_NAMES[id] || id, detail: data.auth?.label || (data.version ? `Version ${data.version}` : ""),
+          models: data.models.filter((model) => model.slug) });
       } catch {}
     }
     let defaults = null;
@@ -486,7 +487,7 @@ export class T3Chat {
   }
 
   emitOptions() {
-    const harnesses = [...this.providers].map(([value, provider]) => ({ value, name: provider.name }));
+    const harnesses = [...this.providers].map(([value, provider]) => ({ value, name: provider.name, description: provider.detail || "" }));
     const models = (this.providers.get(this.harness)?.models || []).map((model) => ({ value: model.slug, name: model.name || model.slug }));
     this.emit({ type: "options", options: [
       { id: "harness", name: "Harness", category: "harness", value: this.harness, values: harnesses },
