@@ -3475,44 +3475,87 @@
     return { model: data.model || "unknown model", seconds: (performance.now() - started) / 1000 };
   }
 
-  // Choices as tiles with their logos. The chosen one takes on its own
-  // color: a tinted face, a ring and a small mark in the corner.
-  function pickGrid(label, items, value, onPick, { compact = false } = {}) {
-    const grid = h("div", { class: `pick-grid${compact ? " compact" : ""}`, role: "radiogroup", "aria-label": label });
-    for (const item of items) {
-      const tile = h("button", { type: "button", class: "pick", role: "radio", "aria-checked": String(item.id === value), title: item.title || item.name },
-        h("span", { class: "pick-logo" }, item.node || (item.logo ? h("img", { src: item.logo, alt: "" }) : h("span", { class: "pick-letter", text: item.name[0] }))),
-        h("span", { class: "pick-name", text: item.name }));
-      tile.style.setProperty("--pick", item.color || "rgb(var(--still-agent-rgb))");
-      tile.addEventListener("click", () => {
-        if (tile.getAttribute("aria-checked") === "true") return;
-        for (const other of grid.children) other.setAttribute("aria-checked", String(other === tile));
-        if (animationsAllowed()) tile.querySelector(".pick-logo").animate([{ scale: ".82" }, { scale: "1" }], { duration: 320, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
-        onPick(item.id);
+  function buttonModeRow(mode) {
+    const meta = utilityMeta[mode];
+    const locked = mode === "settings";
+    const on = locked || enabledUtilityModes().has(mode);
+    const row = h("button", { type: "button", class: "settings-row mode", role: "switch", "aria-checked": String(on), "aria-disabled": String(locked) },
+      h("span", { class: "settings-mode-icon" }, icon(meta.paths, meta.className || "")),
+      h("span", { class: "settings-copy" }, h("strong", { text: meta.label.replace(/ \(.*\)$/, "") }), h("small", { text: MODE_NOTES[mode] || "" })),
+      h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" })));
+    if (!locked) {
+      row.addEventListener("click", () => {
+        const modes = enabledUtilityModes();
+        if (modes.has(mode)) modes.delete(mode); else modes.add(mode);
+        setUtilityModes(modes);
+        row.setAttribute("aria-checked", String(modes.has(mode)));
       });
-      grid.append(tile);
     }
-    return grid;
+    return row;
   }
 
-  // Toggle tiles: several can be on at once.
-  function toggleGrid(label, items, isOn, onToggle) {
-    const grid = h("div", { class: "pick-grid compact", role: "group", "aria-label": label });
+  // Bare logos in a row. The others rest grey and faint; the chosen one is
+  // in full color, its name beneath. "+" adds your own; a custom one can be
+  // removed from under its name.
+  function logoRow(label, items, value, { onPick, onAdd, onRemove } = {}) {
+    const wrap = h("div", { class: "logo-picker" });
+    const row = h("div", { class: "logo-row", role: "radiogroup", "aria-label": label });
+    const caption = h("div", { class: "logo-caption" });
+    const paint = (id) => {
+      const item = items.find((candidate) => candidate.id === id);
+      caption.replaceChildren(h("span", { text: item?.name || "" }));
+      if (item?.custom && onRemove) {
+        const remove = h("button", { type: "button", class: "logo-remove", text: "Remove" });
+        remove.addEventListener("click", () => onRemove(item.id));
+        caption.append(remove);
+      }
+    };
     for (const item of items) {
-      const tile = h("button", { type: "button", class: "pick", "aria-pressed": String(isOn(item.id)), title: item.title || item.name },
-        h("span", { class: "pick-logo" }, item.node), h("span", { class: "pick-name", text: item.name }));
-      if (item.locked) { tile.setAttribute("aria-disabled", "true"); tile.title = `${item.name} always stays on the button`; }
-      else tile.addEventListener("click", () => tile.setAttribute("aria-pressed", String(onToggle(item.id))));
-      grid.append(tile);
+      const logo = item.node || (item.logo ? h("img", { src: item.logo, alt: "" }) : null);
+      const button = h("button", { type: "button", class: "logo-pick", role: "radio", "aria-checked": String(item.id === value), title: item.name, "aria-label": item.name },
+        logo || h("span", { class: "logo-letter", text: (item.name || "?")[0].toUpperCase() }));
+      logo?.addEventListener?.("error", () => logo.replaceWith(h("span", { class: "logo-letter", text: (item.name || "?")[0].toUpperCase() })), { once: true });
+      button.addEventListener("click", () => {
+        if (button.getAttribute("aria-checked") === "true") return;
+        for (const other of row.querySelectorAll(".logo-pick")) other.setAttribute("aria-checked", String(other === button));
+        if (animationsAllowed()) button.animate([{ scale: ".8" }, { scale: "1.08" }, { scale: "1" }], { duration: 340, easing: "cubic-bezier(.23, 1, .32, 1)" });
+        paint(item.id);
+        onPick?.(item.id);
+      });
+      row.append(button);
     }
-    return grid;
+    if (onAdd) {
+      const add = h("button", { type: "button", class: "logo-add", title: "Add your own", "aria-label": `Add your own ${label.toLowerCase()}` },
+        icon([["path", { d: "M12 6v12M6 12h12" }]]));
+      add.addEventListener("click", () => onAdd(add));
+      row.append(add);
+    }
+    paint(value);
+    wrap.append(row, caption);
+    return wrap;
   }
 
-  // A small panel under a choice, for the settings that belong to it.
-  function detailPanel(...children) {
-    const panel = h("div", { class: "pick-detail" }, ...children.filter(Boolean));
-    if (animationsAllowed()) panel.animate([{ opacity: 0, transform: "translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(0, 0, .58, 1)" });
-    return panel;
+  // A small inline form for adding a custom engine or provider.
+  function addForm(fields, onSave, onCancel) {
+    const inputs = fields.map((field) => h("input", { class: "settings-field", type: field.type || "text", placeholder: field.placeholder || "",
+      value: field.value || "", spellcheck: "false", "aria-label": field.label }));
+    const save = h("button", { type: "button", class: "settings-mini strong", text: "Add" });
+    const cancel = h("button", { type: "button", class: "settings-mini", text: "Cancel" });
+    const form = h("div", { class: "logo-form" }, ...inputs, h("span", { class: "logo-form-actions" }, cancel, save));
+    save.addEventListener("click", () => {
+      const values = inputs.map((input) => input.value.trim());
+      const problem = onSave(values);
+      if (problem) { inputs[problem.index ?? 0].setAttribute("aria-invalid", "true"); inputs[problem.index ?? 0].focus(); }
+    });
+    cancel.addEventListener("click", onCancel);
+    for (const input of inputs) input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); save.click(); }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(); }
+      input.removeAttribute("aria-invalid");
+    });
+    setTimeout(() => inputs[0]?.focus(), 0);
+    if (animationsAllowed()) form.animate([{ opacity: 0, transform: "translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 200, easing: "cubic-bezier(0, 0, .58, 1)" });
+    return form;
   }
 
   function choiceSelect(label, choice, saved, onChange) {
@@ -3520,30 +3563,32 @@
     for (const item of choice.values) select.append(h("option", { value: item.value, text: item.name }));
     select.value = choice.values.some((item) => item.value === saved) ? saved : choice.value;
     select.addEventListener("change", () => onChange(select.value));
-    return h("label", { class: "detail-row" }, h("span", { text: label }), select);
+    return h("label", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("strong", { text: label })), select);
   }
 
-  const ENGINE_COLORS = { still: "rgb(var(--still-agent-rgb))", searxng: "#3050ff", google: "#4285f4", duckduckgo: "#de5833", brave: "#fb542b", bing: "#258ffa", ecosia: "#2ea05a", startpage: "#6563ff" };
-  const AGENT_LOGOS = { codex: ["resource://still/logos/openai.svg", "#10a37f"], claude: ["resource://still/logos/claude.svg", "#d97757"], t3: ["resource://still/logos/t3.png", "#8b5cf6"] };
+  const AGENT_LOGOS = { codex: "resource://still/logos/openai.svg", claude: "resource://still/logos/claude.svg", t3: "resource://still/logos/t3.png" };
 
   function settingsGroup(title, ...children) {
     return h("section", { class: "settings-section" }, h("h3", { text: title }), ...children.filter(Boolean));
   }
 
+  function readJsonPref(name) {
+    try { const value = JSON.parse(Services.prefs.getStringPref(name, "[]")); return Array.isArray(value) ? value : []; } catch { return []; }
+  }
+
   async function renderSettings() {
-    // ---- search
-    const engines = lazy.StillShared.searchEngines || [];
-    const engineId = lazy.StillShared.searchEngine?.().id || "still";
-    const searchSlot = h("div");
-    const aiChoice = () => Services.prefs.getStringPref("still.search.ai", "").trim();
     let detected = "";
     try { detected = await lazy.StillShared.gridApiServer(); } catch {}
 
-    const stillSearchDetail = () => {
+    // ---- search
+    const searchBox = h("div", { class: "settings-block" });
+    const searchExtra = h("div");
+    const aiChoice = () => Services.prefs.getStringPref("still.search.ai", "").trim();
+    const summaryRows = () => {
       const custom = /^https?:\/\//.test(aiChoice()) ? aiChoice() : "";
       const endpoint = custom || detected;
       const on = aiChoice() !== "off" && Boolean(endpoint);
-      const model = h("span", { class: "detail-chip mono", text: endpoint ? "Checking…" : "No endpoint" });
+      const model = h("span", { class: "settings-value mono", text: "Checking…" });
       const runCheck = (url) => {
         if (!url) { model.textContent = "No endpoint"; return; }
         model.textContent = "Checking…";
@@ -3551,7 +3596,6 @@
           (error) => { model.textContent = `Not answering (${error.message || error})`; });
       };
       const field = h("input", { class: "settings-field", type: "url", spellcheck: "false", value: custom, placeholder: detected || "https://your-server/", "aria-label": "Summary endpoint" });
-      const fieldRow = h("label", { class: "detail-row", hidden: true }, h("span", { text: "Endpoint" }), field);
       field.addEventListener("change", () => {
         const value = field.value.trim();
         if (value && !/^https?:\/\//.test(value)) { field.setAttribute("aria-invalid", "true"); return; }
@@ -3561,123 +3605,163 @@
         runCheck(value || detected);
       });
       field.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); field.blur(); } });
-      const edit = h("button", { type: "button", class: "settings-mini", text: "Endpoint" });
-      edit.addEventListener("click", () => { fieldRow.hidden = !fieldRow.hidden; if (!fieldRow.hidden) field.focus(); });
-      const modelRow = h("div", { class: "detail-row", hidden: !on }, h("span", { text: "Model" }), h("span", { class: "detail-end" }, model, edit));
+      const details = [
+        h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("strong", { text: "Model" })), h("span", { class: "settings-value-wrap" }, model)),
+        h("label", { class: "settings-row field-row" }, h("span", { class: "settings-copy" }, h("strong", { text: "Endpoint" })), field)
+      ];
+      for (const node of details) node.hidden = !on;
       const toggle = settingSwitch("AI summaries", "", on, (next) => {
         Services.prefs.setStringPref("still.search.ai", next ? custom : "off");
         lazy.StillShared.refreshSearchConfig?.().catch(console.error);
-        modelRow.hidden = !next;
-        if (!next) fieldRow.hidden = true;
-        else runCheck(endpoint);
+        for (const node of details) node.hidden = !next;
+        if (next) runCheck(endpoint);
       });
       if (!endpoint) toggle.disabled = true;
       if (on) runCheck(endpoint);
-      return detailPanel(toggle, modelRow, fieldRow);
+      return h("div", { class: "settings-rows" }, toggle, ...details);
     };
-    const showEngineDetail = (id) => searchSlot.replaceChildren(...(id === "still" ? [stillSearchDetail()] : []));
-    showEngineDetail(engineId);
-    const engineGrid = pickGrid("Search engine", engines.map((engine) => ({ id: engine.id, name: engine.name, logo: engine.logo, color: ENGINE_COLORS[engine.id] })),
-      engineId, (id) => {
+    const renderSearch = () => {
+      const engines = lazy.StillShared.searchEngines || [];
+      const chosen = lazy.StillShared.searchEngine?.().id || "still";
+      const extra = () => searchExtra.replaceChildren(...((lazy.StillShared.searchEngine?.().id || "still") === "still" ? [summaryRows()] : []));
+      const applyEngine = (id) => {
         Services.prefs.setStringPref("still.search.engine", id);
         lazy.StillShared.refreshSearchConfig?.().catch(console.error);
         lazy.StillShared.setSearchEngine?.();
-        showEngineDetail(id);
+      };
+      const picker = logoRow("Search engine", engines, chosen, {
+        onPick: (id) => { applyEngine(id); extra(); },
+        onRemove: (id) => {
+          Services.prefs.setStringPref("still.search.custom", JSON.stringify(readJsonPref("still.search.custom").filter((engine) => engine.id !== id)));
+          applyEngine("still");
+          renderSearch();
+        },
+        onAdd: () => {
+          searchExtra.replaceChildren(addForm([
+            { label: "Search address", type: "url", placeholder: "https://example.com/search?q={q}" },
+            { label: "Name", placeholder: "Name (optional)" }
+          ], ([url, name]) => {
+            if (!/^https?:\/\/.+/.test(url)) return { index: 0 };
+            const template = url.includes("{q}") ? url : url.includes("%s") ? url.replace("%s", "{q}") : `${url}${/[?&=]$/.test(url) ? "" : (url.includes("?") ? "&q=" : "?q=")}{q}`;
+            const id = `custom-${Date.now().toString(36)}`;
+            Services.prefs.setStringPref("still.search.custom", JSON.stringify([...readJsonPref("still.search.custom"), { id, name, url: template }]));
+            applyEngine(id);
+            renderSearch();
+            return null;
+          }, extra));
+        }
       });
+      searchBox.replaceChildren(picker, searchExtra);
+      extra();
+    };
+    renderSearch();
 
     // ---- side chat
     const chat = window.StillChat;
-    const chatAgentsList = chat?.agents?.() || [];
-    const chatId = Services.prefs.getStringPref("still.chat.agent", "codex");
-    const chatSlot = h("div");
-    const showChatDetail = (id) => {
-      const agent = chatAgentsList.find((candidate) => candidate.id === id);
-      if (!agent || !chat) { chatSlot.replaceChildren(); return; }
-      const body = h("div", { class: "detail-rows" });
-      const fill = (options) => {
-        const rows = options.map((choice) => {
-          const name = /model/i.test(choice.id) || /model/i.test(choice.name) ? "Model" : /effort|reason|thought/i.test(`${choice.id} ${choice.name}`) ? "Effort" : choice.name;
+    const chatBox = h("div", { class: "settings-block" });
+    const chatExtra = h("div");
+    const renderChat = () => {
+      const agents = chat?.agents?.() || [];
+      const chosen = Services.prefs.getStringPref("still.chat.agent", "codex");
+      const showChoices = (id) => {
+        const agent = agents.find((candidate) => candidate.id === id);
+        if (!agent || !chat) { chatExtra.replaceChildren(); return; }
+        const rows = h("div", { class: "settings-rows" });
+        const fill = (options) => rows.replaceChildren(...options.map((choice) => {
+          const name = /model/i.test(`${choice.id} ${choice.name}`) ? "Model" : /effort|reason|thought/i.test(`${choice.id} ${choice.name}`) ? "Effort" : choice.name;
           return choiceSelect(name, choice, chat.savedChoice(agent.id, choice.id), (value) => chat.applyChoice(agent.id, choice.id, value));
-        });
-        body.replaceChildren(...(rows.length ? rows : [h("p", { class: "detail-note", text: `${agent.name} offers no choices.` })]));
+        }));
+        const known = chat.knownChoices(agent.id);
+        if (known.length) fill(known);
+        else {
+          rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: `Asking ${agent.name} for its models…` }))));
+          chat.loadChoices(agent.id).then((options) => { if (rows.isConnected) fill(options); },
+            (error) => { if (rows.isConnected) rows.replaceChildren(h("div", { class: "settings-row info" }, h("span", { class: "settings-copy" }, h("small", { text: error.message || `${agent.name} did not answer.` })))); });
+        }
+        chatExtra.replaceChildren(rows);
       };
-      const known = chat.knownChoices(agent.id);
-      if (known.length) fill(known);
-      else {
-        body.replaceChildren(h("p", { class: "detail-note", text: `Asking ${agent.name} for its models…` }));
-        chat.loadChoices(agent.id).then((options) => { if (body.isConnected) fill(options); },
-          (error) => { if (body.isConnected) body.replaceChildren(h("p", { class: "detail-note", text: error.message || `${agent.name} did not answer.` })); });
-      }
-      chatSlot.replaceChildren(detailPanel(body));
-    };
-    showChatDetail(chatId);
-    const chatGrid = pickGrid("Side chat agent", chatAgentsList.map((agent) => ({ id: agent.id, name: agent.name, logo: AGENT_LOGOS[agent.id]?.[0], color: AGENT_LOGOS[agent.id]?.[1],
-      title: agent.kind === "t3" ? `${agent.name}: runs as a T3 Code thread` : `${agent.name}: ${[agent.command, ...(agent.args || [])].join(" ")}` })),
-      chatId, (id) => { chat?.selectAgent(id); showChatDetail(id); });
-
-    // ---- button modes
-    const SHORT_MODE_NAMES = { permissions: "Permissions", browser: "Import", tabdock: "Dock slide", theme: "Theme" };
-    const modeTiles = toggleGrid("Button", utilityModes.map((mode) => ({ id: mode, name: SHORT_MODE_NAMES[mode] || utilityMeta[mode].label.replace(/ \(.*\)$/, ""),
-      node: icon(utilityMeta[mode].paths, utilityMeta[mode].className || ""), locked: mode === "settings", title: MODE_NOTES[mode] })),
-      (mode) => enabledUtilityModes().has(mode), (mode) => {
-        const modes = enabledUtilityModes();
-        if (modes.has(mode)) modes.delete(mode); else modes.add(mode);
-        setUtilityModes(modes);
-        return modes.has(mode);
+      const items = agents.map((agent) => {
+        let logo = AGENT_LOGOS[agent.id] || "";
+        if (!logo && agent.endpoint) { try { logo = `${new URL(agent.endpoint).origin}/favicon.ico`; } catch {} }
+        return { id: agent.id, name: agent.name, logo, custom: !AGENT_LOGOS[agent.id] };
       });
+      const picker = logoRow("Side chat", items, chosen, {
+        onPick: (id) => { chat?.selectAgent(id); showChoices(id); },
+        onRemove: (id) => {
+          Services.prefs.setStringPref("still.chat.agents", JSON.stringify(readJsonPref("still.chat.agents").filter((agent) => agent.id !== id)));
+          chat?.selectAgent("codex");
+          renderChat();
+        },
+        onAdd: () => {
+          chatExtra.replaceChildren(addForm([
+            { label: "Endpoint", type: "url", placeholder: "OpenAI-style server", value: detected },
+            { label: "Name", placeholder: "Name", value: detected ? "GridAPI" : "" },
+            { label: "API key", type: "password", placeholder: "API key (if it needs one)" }
+          ], ([endpoint, name, key]) => {
+            if (!/^https?:\/\/.+/.test(endpoint)) return { index: 0 };
+            const id = `custom-${Date.now().toString(36)}`;
+            Services.prefs.setStringPref("still.chat.agents", JSON.stringify([...readJsonPref("still.chat.agents"),
+              { id, name: name || new URL(endpoint).host, kind: "openai", endpoint, ...(key ? { key } : {}) }]));
+            chat?.selectAgent(id);
+            renderChat();
+            return null;
+          }, () => showChoices(Services.prefs.getStringPref("still.chat.agent", "codex"))));
+        }
+      });
+      chatBox.replaceChildren(picker, chatExtra);
+      showChoices(chosen);
+    };
+    renderChat();
 
-    // ---- theme
+    // ---- theme, as swatches in the same bare row
     const theme = Services.prefs.getStringPref(PREF_THEME, "system");
     const swatch = (a, b) => h("span", { class: "theme-swatch", style: `--a: ${a}; --b: ${b}` });
-    const themeGrid = pickGrid("Theme", [
+    const themePicker = logoRow("Theme", [
       { id: "system", name: "System", node: swatch("#f3f3f0", "#161716") },
       { id: "light", name: "Light", node: swatch("#f3f3f0", "#f3f3f0") },
-      { id: "dark", name: "Dark", node: swatch("#202221", "#202221") },
+      { id: "dark", name: "Dark", node: swatch("#2a2c2b", "#2a2c2b") },
       { id: "oled", name: "OLED", node: swatch("#000", "#000") }
-    ], theme, (name) => { Services.prefs.setStringPref(PREF_THEME, name); applyTheme(name); }, { compact: true });
+    ], theme, { onPick: (name) => { Services.prefs.setStringPref(PREF_THEME, name); applyTheme(name); } });
 
     // ---- agents
     const connected = [...new Set(agentState.clients)];
     const agentsOn = Services.prefs.getBoolPref("still.agent.enabled", true);
-    const agentDetail = h("div", { hidden: !agentsOn },
+    const agentRows = [
       settingInfo("Connect with", "still mcp", { mono: true, copy: true }),
       settingInfo("Connected", connected.length ? new Intl.ListFormat("en").format(connected) : "Nobody right now"),
-      settingSwitch("Live view", "A small picture when an agent works out of sight", agentViewEnabled(),
-        (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); }));
+      settingSwitch("Live view", "", agentViewEnabled(), (on) => { Services.prefs.setBoolPref(PREF_AGENT_VIEW, on); if (!on) hideAgentView(); })
+    ];
+    for (const row of agentRows) row.hidden = !agentsOn;
 
     // ---- more
     const tab = gBrowser.selectedTab;
     const siteHost = (() => { try { return new URL(tabUrl(tab)).host; } catch { return ""; } })();
     const more = h("div", { class: "settings-rows", hidden: true },
-      settingSwitch("Dock slide", "Pages slide when switching from the dock", dockSlideEnabled(), (on) => { Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on); renderUtilityButton(); }),
+      settingSwitch("Dock slide", "", dockSlideEnabled(), (on) => { Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on); renderUtilityButton(); }),
       siteHost ? settingAction(`Permissions for ${siteHost}`, "", () => { hideSettings(); renderPermissions(); }) : null,
-      settingAction("Import from Opera GX", "Sign-ins", () => { hideSettings(); runImport("opera"); }),
+      settingAction("Import from Opera GX", "", () => { hideSettings(); runImport("opera"); }),
       settingAction("Import history from Opera GX", "", () => { hideSettings(); runHistoryImport(); }),
-      settingAction("Import from another browser", "Bookmarks, history, passwords", () => {
+      settingAction("Import from another browser", "", () => {
         hideSettings();
         try { lazy.MigrationUtils.showMigrationWizard(window, {}); } catch { showToast("Could not open the import window."); }
       }));
     const moreButton = h("button", { type: "button", class: "settings-more", "aria-expanded": "false" },
       h("span", { text: "More" }), icon([["path", { d: "m7 10 5 5 5-5" }]], "settings-more-chevron"));
-    moreButton.addEventListener("click", () => {
-      more.hidden = !more.hidden;
-      moreButton.setAttribute("aria-expanded", String(!more.hidden));
-    });
+    moreButton.addEventListener("click", () => { more.hidden = !more.hidden; moreButton.setAttribute("aria-expanded", String(!more.hidden)); });
 
     settingsBody.replaceChildren(
-      settingsGroup("Search", engineGrid, searchSlot),
-      settingsGroup("Side chat", chatGrid, chatSlot),
-      settingsGroup("Button", modeTiles),
-      settingsGroup("Theme", themeGrid),
+      settingsGroup("Search", searchBox),
+      settingsGroup("Side chat", chatBox),
+      settingsGroup("Theme", themePicker),
+      settingsGroup("Button", h("div", { class: "settings-rows" }, ...utilityModes.map(buttonModeRow))),
       settingsGroup("Agents", h("div", { class: "settings-rows" },
         settingSwitch("Let agents use Still", "", agentsOn, (on) => {
           Services.prefs.setBoolPref("still.agent.enabled", on);
-          agentDetail.hidden = !on;
+          for (const row of agentRows) row.hidden = !on;
           if (!on) lazy.StillAgent.disconnectAll().catch(console.error);
-        }), agentDetail)),
+        }), ...agentRows)),
       h("section", { class: "settings-section" }, moreButton, more));
   }
-
 
   const settingsState = { opener: null };
   function showSettings({ keyboard = false } = {}) {

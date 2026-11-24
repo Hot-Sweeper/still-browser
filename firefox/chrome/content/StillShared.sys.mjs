@@ -62,15 +62,29 @@ const SEARCH_ENGINES = [
   { id: "searxng", name: "SearXNG", logo: "resource://still/logos/searxng.svg", url: `http://127.0.0.1:${48230}/search?q={q}` },
   { id: "google", name: "Google", logo: "resource://still/logos/google.svg", url: "https://www.google.com/search?q={q}", builtin: "Google" },
   { id: "duckduckgo", name: "DuckDuckGo", logo: "resource://still/logos/duckduckgo.svg", url: "https://duckduckgo.com/?q={q}", builtin: "DuckDuckGo" },
-  { id: "brave", name: "Brave", logo: "resource://still/logos/brave.svg", url: "https://search.brave.com/search?q={q}" },
-  { id: "bing", name: "Bing", logo: "resource://still/logos/bing.svg", url: "https://www.bing.com/search?q={q}", builtin: "Bing" },
-  { id: "ecosia", name: "Ecosia", logo: "resource://still/logos/ecosia.svg", url: "https://www.ecosia.org/search?q={q}", builtin: "Ecosia" },
-  { id: "startpage", name: "Startpage", logo: "resource://still/logos/startpage.svg", url: "https://www.startpage.com/do/search?q={q}" }
+  { id: "brave", name: "Brave", logo: "resource://still/logos/brave.svg", url: "https://search.brave.com/search?q={q}" }
 ];
+
+// Engines you add in Settings: [{ id, name, url }] with {q} where the query
+// goes. Their logo is the site's own icon.
+function customSearchEngines() {
+  let list = [];
+  try { list = JSON.parse(Services.prefs.getStringPref("still.search.custom", "[]")); } catch {}
+  return (Array.isArray(list) ? list : []).filter((engine) => engine?.id && /^https?:\/\/.+\{q\}/.test(engine.url || ""))
+    .map((engine) => {
+      let origin = "";
+      try { origin = new URL(engine.url.replace("{q}", "")).origin; } catch {}
+      return { ...engine, name: engine.name || origin.replace(/^https?:\/\/(www\.)?/, ""), logo: origin ? `${origin}/favicon.ico` : "", custom: true };
+    });
+}
+
+function allSearchEngines() {
+  return [...SEARCH_ENGINES, ...customSearchEngines()];
+}
 
 function searchEngine() {
   const id = Services.prefs.getStringPref("still.search.engine", "still");
-  return SEARCH_ENGINES.find((engine) => engine.id === id) || SEARCH_ENGINES[0];
+  return allSearchEngines().find((engine) => engine.id === id) || SEARCH_ENGINES[0];
 }
 
 // The address a query goes to with the chosen engine, or "" for Still Search.
@@ -690,7 +704,7 @@ export const StillShared = {
   extensionReady,
   gridApiServer,
   refreshSearchConfig: () => writeLocalConfig(stillFile("extension")),
-  searchEngines: SEARCH_ENGINES,
+  get searchEngines() { return allSearchEngines(); },
   searchEngine,
   searchUrlFor,
   setSearchEngine,

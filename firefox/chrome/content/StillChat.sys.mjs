@@ -40,7 +40,7 @@ export function chatAgents() {
   let extra = [];
   try { extra = JSON.parse(Services.prefs.getStringPref(PREF_AGENTS, "[]")); } catch {}
   const custom = (Array.isArray(extra) ? extra : [])
-    .filter((agent) => agent?.id && agent?.command)
+    .filter((agent) => agent?.id && (agent.kind === "openai" ? /^https?:\/\//.test(agent.endpoint || "") : agent?.command))
     .map((agent) => ({ kind: "acp", args: [], ...agent, name: agent.name || agent.id }));
   return [...BUILT_IN, ...custom.filter((agent) => !BUILT_IN.some((built) => built.id === agent.id))];
 }
@@ -483,7 +483,118 @@ export class T3Chat {
   }
 }
 
+// A chat with any OpenAI-style server (your GridAPI, a local llama.cpp, a
+// hosted API): plain conversation about the page, streamed, without tools.
+// Added in Settings as { kind: "openai", endpoint, key?, model? }.
+export class OpenAIChat {
+  constructor(agent, listener) {
+    this.agent = agent;
+    this.listener = listener;
+    this.messages = [];
+    this.model = agent.model || "";
+    this.controller = null;
+    this.models = [];
+  }
+
+  emit(event) {
+    try { this.listener(event); } catch (error) { console.error(error); }
+  }
+
+  url(path) {
+    const base = this.agent.endpoint.replace(/\/*$/, "/");
+    return new URL(/\/v1\/$/.test(base) ? path : `v1/${path}`, base).href;
+  }
+
+  headers() {
+    return { "Content-Type": "application/json", "X-GridAPI-Project": "Still", "X-GridAPI-Title": "Side chat",
+      ...(this.agent.key ? { Authorization: `Bearer ${this.agent.key}` } : {}) };
+  }
+
+  async start() {
+    if (this.started) return;
+    this.started = true;
+    try {
+      const response = await fetch(this.url("models"), { headers: this.headers(), signal: AbortSignal.timeout(8000) });
+      const data = response.ok ? await response.json() : null;
+      this.models = (data?.data || []).map((model) => model.id).filter(Boolean).slice(0, 60);
+    } catch {}
+    this.emitOptions();
+  }
+
+  emitOptions() {
+    const values = [{ value: "", name: "Server default" }, ...this.models.map((id) => ({ value: id, name: id }))];
+    this.emit({ type: "options", options: [{ id: "model", name: "Model", value: this.model, values }] });
+  }
+
+  async prompt(blocks) {
+    await this.start();
+    const text = blocks.map((block) => block.text || "").filter(Boolean).join("\n\n");
+    if (!this.messages.length) {
+      this.messages.push({ role: "system", content: "You are the side chat of Still, a calm web browser. The user may share the page they are looking at; answer plainly and briefly." });
+    }
+    this.messages.push({ role: "user", content: text });
+    this.controller = new AbortController();
+    const response = await fetch(this.url("chat/completions"), {
+      method: "POST",
+      headers: this.headers(),
+      signal: this.controller.signal,
+      body: JSON.stringify({ messages: this.messages, stream: true, ...(this.model ? { model: this.model } : {}) })
+    }).catch((error) => { if (this.controller.signal.aborted) return null; throw error; });
+    if (!response) return "cancelled";
+    if (!response.ok || !response.body) {
+      this.messages.pop();
+      throw new Error(`${this.agent.name} answered with error ${response.status}`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const id = `m${Date.now()}`;
+    let buffer = "";
+    let reply = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const piece = JSON.parse(data).choices?.[0]?.delta?.content;
+            if (piece) { reply += piece; this.emit({ type: "text", id, text: piece }); }
+          } catch {}
+        }
+      }
+    } catch (error) {
+      if (!this.controller.signal.aborted) throw error;
+    }
+    this.messages.push({ role: "assistant", content: reply });
+    return this.controller.signal.aborted ? "cancelled" : "end_turn";
+  }
+
+  cancel() {
+    this.controller?.abort();
+  }
+
+  async reset() {
+    this.cancel();
+    this.messages = [];
+  }
+
+  async choose(id, value) {
+    if (id === "model") this.model = value;
+    this.emitOptions();
+  }
+
+  stop() {
+    this.cancel();
+  }
+}
+
 export function createChat(agent, listener) {
+  if (agent.kind === "openai") return new OpenAIChat(agent, listener);
   return agent.kind === "t3" ? new T3Chat(agent, listener) : new AcpChat(agent, listener);
 }
 
