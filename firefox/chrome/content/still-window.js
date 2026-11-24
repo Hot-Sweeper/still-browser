@@ -480,6 +480,8 @@
     if (document.hidden || state.starting) return false;
     const cursor = lazy.StillShared.cursorInWindow(window);
     if (!cursor) return false;
+    // The side chat's right-edge check reads the same reading.
+    try { window.StillChat?.onCursor?.(cursor); } catch (error) { console.error(error); }
     const scale = window.devicePixelRatio || 1;
     const fromTop = cursor.y / scale;
     const across = cursor.x >= 0 && cursor.x < cursor.width;
@@ -496,11 +498,21 @@
   function nearLoop() {
     nearFrame = pollReveal() ? window.requestAnimationFrame(nearLoop) : 0;
   }
-  state.revealTimer = setInterval(() => {
-    if (nearFrame) return;
-    if (pollReveal()) nearFrame = window.requestAnimationFrame(nearLoop);
-  }, 40);
-  window.addEventListener("unload", () => clearInterval(state.revealTimer));
+  // On battery the far-from-the-bar check runs every 80 ms instead of 40:
+  // the cursor still has to cross the 160 px near zone, where it is read
+  // every frame, so the bar appears just as quickly.
+  const powerSaving = () => { try { return lazy.StillShared.power().saving; } catch { return false; } };
+  function startRevealTimer() {
+    clearInterval(state.revealTimer);
+    state.revealTimer = setInterval(() => {
+      if (nearFrame) return;
+      if (pollReveal()) nearFrame = window.requestAnimationFrame(nearLoop);
+    }, powerSaving() ? 80 : 40);
+  }
+  startRevealTimer();
+  const powerObserver = { observe: () => { startRevealTimer(); if (!settingsPage.hidden) renderSettings(); } };
+  Services.obs.addObserver(powerObserver, "still-power");
+  window.addEventListener("unload", () => { clearInterval(state.revealTimer); Services.obs.removeObserver(powerObserver, "still-power"); });
   chrome.addEventListener("mouseenter", () => clearTimeout(state.hideTimer));
   chrome.addEventListener("mouseleave", () => { if (!chromeBusy()) scheduleChromeHide(); });
 
@@ -3171,7 +3183,10 @@
 
   async function sleepSlots() {
     if (!Services.prefs.getBoolPref(PREF_SLEEP, true)) return;
-    const after = Math.max(1, Services.prefs.getIntPref(PREF_SLEEP_MINUTES, 30)) * 60 * 1000;
+    // Sooner on battery, unless you set your own time.
+    const minutes = Services.prefs.prefHasUserValue(PREF_SLEEP_MINUTES) ? Services.prefs.getIntPref(PREF_SLEEP_MINUTES, 30)
+      : powerSaving() ? 10 : 30;
+    const after = Math.max(1, minutes) * 60 * 1000;
     const busy = agentWorkingTab();
     let slept = false;
     for (const tab of slotTabs()) {
@@ -4105,7 +4120,14 @@
     const tab = gBrowser.selectedTab;
     const siteHost = (() => { try { return new URL(tabUrl(tab)).host; } catch { return ""; } })();
     const more = h("div", { class: "settings-rows", hidden: true },
-      settingSwitch("Sleep unused slots", "Slots you have not opened for 30 minutes free their memory and reload when you open them",
+      (() => {
+        const power = (() => { try { return lazy.StillShared.power(); } catch { return { present: false }; } })();
+        if (!power.present) return null;
+        return settingSwitch("Save battery when unplugged",
+          power.battery ? (power.saving ? "On battery now: saving" : "On battery now") : "Plugged in now",
+          Services.prefs.getBoolPref("still.power.saver", true), (on) => Services.prefs.setBoolPref("still.power.saver", on));
+      })(),
+      settingSwitch("Sleep unused slots", "Slots you have not opened for 30 minutes (10 on battery) free their memory and reload when you open them",
         Services.prefs.getBoolPref("still.slots.sleep", true), (on) => Services.prefs.setBoolPref("still.slots.sleep", on)),
       settingSwitch("Dock slide", "", dockSlideEnabled(), (on) => { Services.prefs.setBoolPref(PREF_DOCK_SLIDE, on); renderUtilityButton(); }),
       siteHost ? settingAction(`Permissions for ${siteHost}`, "", () => { hideSettings(); renderPermissions(); }) : null,

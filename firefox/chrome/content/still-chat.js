@@ -182,19 +182,20 @@
 
   // Resting the pointer at the window's right edge opens the chat (without
   // taking the keyboard from the page). A short dwell keeps a quick pass to
-  // a page's scrollbar from opening it.
-  const edgeTimer = setInterval(() => {
-    if (state.open || document.hidden || !Services.prefs.getBoolPref(PREF_EDGE, true) || !document.hasFocus()) {
+  // a page's scrollbar from opening it. The cursor is read once, by the
+  // window layer's own check (still-window.js), which hands it here: one
+  // wakeup serves the bar and the chat.
+  function edgeCheck(cursor) {
+    if (state.open || !Services.prefs.getBoolPref(PREF_EDGE, true) || !document.hasFocus()) {
       clearTimeout(state.edgeTimer); state.edgeTimer = 0; return;
     }
-    const cursor = lazy.StillShared.cursorInWindow(window);
     const scale = window.devicePixelRatio || 1;
     const atEdge = cursor && cursor.y / scale > 90 && cursor.y < cursor.height - 8
       && cursor.x >= cursor.width - Math.max(2, Math.round(2 * scale)) && cursor.x < cursor.width + 1;
     if (!atEdge) { clearTimeout(state.edgeTimer); state.edgeTimer = 0; return; }
     if (!state.edgeTimer) state.edgeTimer = setTimeout(() => { state.edgeTimer = 0; open({ focus: false }); }, EDGE_DWELL_MS);
-  }, 50);
-  window.addEventListener("unload", () => { clearInterval(edgeTimer); state.chat?.stop(); });
+  }
+  window.addEventListener("unload", () => { clearTimeout(state.edgeTimer); state.chat?.stop(); });
 
   // Drag the left edge to resize; arrow keys on it do the same.
   resizer.addEventListener("pointerdown", (event) => {
@@ -808,6 +809,6 @@
     if (state.chat) switchAgent();
   }
 
-  window.StillChat = { open, close, toggle, isOpen: () => state.open, agents: () => agents(), knownChoices, choicesAge, loadChoices, applyChoice, selectAgent,
+  window.StillChat = { onCursor: edgeCheck, open, close, toggle, isOpen: () => state.open, agents: () => agents(), knownChoices, choicesAge, loadChoices, applyChoice, selectAgent,
     savedChoice: (agentId, id) => Services.prefs.getStringPref(`${PREF_CHOICE}${agentId}.${id}`, "") };
 })();

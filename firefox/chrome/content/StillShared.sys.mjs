@@ -104,6 +104,67 @@ async function writeLocalConfig(dir) {
   });
 }
 
+// Power: plugged in or on battery. On Linux the kernel's power supply list
+// is read every 20 seconds (one small file read); a computer without a
+// battery always counts as plugged in. On battery, and while the setting
+// is on, Still saves where it cannot be felt: background pages run their
+// timers less often and fewer hidden slots stay painted (windows also
+// sleep slots sooner and poll the cursor less while it is far from the
+// bar). Windows learn of changes through the "still-power" topic.
+const POWER_DIR = "/sys/class/power_supply";
+let powerState = { battery: false, present: false };
+let powerTimer = null;
+
+async function readPower() {
+  // For tests on a computer without a battery: "battery" or "ac".
+  const simulate = Services.prefs.getStringPref("still.power.simulate", "");
+  if (simulate) return { battery: simulate === "battery", present: true };
+  if (Services.appinfo.OS !== "Linux") return { battery: false, present: false };
+  let supplies = [];
+  try { supplies = await IOUtils.getChildren(POWER_DIR); } catch { return { battery: false, present: false }; }
+  let mains = false;
+  let present = false;
+  let discharging = false;
+  for (const dir of supplies) {
+    const read = async (name) => { try { return (await IOUtils.readUTF8(PathUtils.join(dir, name))).trim(); } catch { return ""; } };
+    const type = await read("type");
+    if (type === "Mains" || type === "USB") { if ((await read("online")) === "1") mains = true; }
+    else if (type === "Battery" && (await read("scope")) !== "Device") {
+      present = true;
+      if ((await read("status")) === "Discharging") discharging = true;
+    }
+  }
+  return { battery: present && !mains && discharging, present };
+}
+
+function powerSaving() {
+  return powerState.battery && Services.prefs.getBoolPref("still.power.saver", true);
+}
+
+function applyPower() {
+  const saving = powerSaving();
+  const defaults = Services.prefs.getDefaultBranch("");
+  // Hidden pages: timers at most every 2 s instead of every second.
+  defaults.setIntPref("dom.min_background_timeout_value", saving ? 2000 : 1000);
+  // Painted slots: the current one and its neighbours instead of all five.
+  defaults.setIntPref("browser.tabs.remote.tabCacheSize", saving ? 3 : 5);
+  Services.obs.notifyObservers(null, "still-power", saving ? "saving" : "normal");
+}
+
+async function watchPower() {
+  if (powerTimer) return;
+  const check = async () => {
+    const next = await readPower();
+    const changed = next.battery !== powerState.battery || next.present !== powerState.present;
+    powerState = next;
+    if (changed) applyPower();
+  };
+  await check();
+  if (!powerState.present) return; // no battery: nothing to watch
+  powerTimer = lazy.setInterval(check, 20 * 1000);
+  Services.prefs.addObserver("still.power.saver", applyPower);
+}
+
 // Still's page features (start page, YouTube, channel manager) ship as a
 // WebExtension next to the runtime. Release Firefox only runs unsigned
 // extensions as temporary add-ons, so it is loaded again on every start.
@@ -705,6 +766,7 @@ export const StillShared = {
   gridApiServer,
   refreshSearchConfig: () => writeLocalConfig(stillFile("extension")),
   get searchEngines() { return allSearchEngines(); },
+  power: () => ({ ...powerState, saving: powerSaving() }),
   searchEngine,
   searchUrlFor,
   setSearchEngine,
@@ -731,6 +793,7 @@ export const StillShared = {
     superviseSearch(win);
     installSearchRedirect();
     setSearchEngine();
+    watchPower().catch(console.error);
     applyWindowIcon(win);
     // Firefox may reset the icon once the window is shown.
     win.addEventListener("load", () => applyWindowIcon(win), { once: true });
