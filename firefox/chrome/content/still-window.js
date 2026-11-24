@@ -2899,7 +2899,7 @@
   // --------------------------------------------------------------- agents
   // AI agents connect through `still mcp` or `still agent` (StillAgent.sys.mjs).
   // Tabs they open are hidden agent tabs: outside the five slots, shown as
-  // small icons beside the agent mark, listed in the agent panel, and moved
+  // live pictures in the agent gallery (the agent button), and moved
   // into a slot when you (or the agent) show one, or when you drag one
   // into the row.
   //
@@ -2911,8 +2911,8 @@
   //   bottom left. A thin light runs along the top edge meanwhile.
   // - In a slot behind the current one, that slot is outlined and its icon
   //   carries a small pulsing light.
-  // - In a hidden agent tab, that tab's icon beside the mark is ringed.
-  // - The panel keeps a live list of recent steps, with where each happened.
+  // - In a hidden agent tab, a small live view shows it, and the gallery
+  //   shows the agent's pointer on that tab's picture.
 
   const AGENT_KEY = "still-agent";
   const AGENT_WORKING_MS = 2500;   // a step counts as current this long
@@ -2920,12 +2920,9 @@
   const AGENT_LOG_MAX = 40;
   state.agentOpening = 0;
   const agentState = { clients: [], engine: false, activity: null, idleTimer: 0, log: [], nextStep: 1, pointerTimer: 0, narrateTimer: 0, clockTimer: 0 };
-  const agentPanel = h("div", { class: "utility-panel agent-panel", hidden: true, role: "dialog", "aria-label": "Agent access" });
+  const agentPanel = h("section", { id: "still-agent-gallery", hidden: true, role: "dialog", "aria-label": "Agent tabs", tabindex: "-1" });
   const agentLive = h("span", { class: "visually-hidden", role: "status", "aria-live": "polite" });
   const agentEdge = h("div", { id: "still-agent-edge", "aria-hidden": "true" });
-  const agentChips = h("span", { class: "agent-chips", "aria-hidden": "true" });
-  agentButton.append(agentChips);
-  const agentSteps = h("ol", { class: "agent-steps", "aria-label": "Recent agent steps" });
   const starPath = "M12 4.2c.55 3.9 2.6 6 6.6 6.6-4 .6-6.05 2.7-6.6 6.6-.55-3.9-2.6-6-6.6-6.6 4-.6 6.05-2.7 6.6-6.6Z";
 
   // The agent's pointer: an arrow in the agent's light, distinct from yours,
@@ -2939,7 +2936,7 @@
   const agentNarrationText = h("span", { class: "agent-narration-text" });
   const agentNarration = h("div", { id: "still-agent-narration", "aria-hidden": "true" },
     icon([["path", { class: "agent-star", d: starPath }]], "agent-narration-star"), agentNarrationText);
-  chrome.append(agentPanel);
+  chrome.before(agentPanel);
   layer.append(agentFocus, agentPointer, agentNarration, agentEdge, agentLive);
 
   function agentNames() {
@@ -2968,6 +2965,7 @@
 
   function adoptAgentTab(tab) {
     tab.stillAgent = true;
+    tab.stillAgentUsed = Date.now();
     try { SessionStore.setCustomTabValue(tab, AGENT_KEY, "1"); } catch {}
     // Hidden once Firefox has finished adding it.
     Promise.resolve().then(() => {
@@ -2977,7 +2975,7 @@
     });
   }
 
-  function openAgentTab(url, { visible = false } = {}) {
+  function openAgentTab(url, { visible = false, owner = 0 } = {}) {
     state.agentOpening++;
     let tab;
     try {
@@ -2985,6 +2983,7 @@
     } finally {
       state.agentOpening--;
     }
+    if (tab) tab.stillAgentOwner = owner;
     if (visible) Promise.resolve().then(() => showAgentTab(tab));
     return tab;
   }
@@ -3062,209 +3061,301 @@
     return step;
   }
 
-  const stepNodes = new Map();   // step id -> row
-  function stepRow(step) {
-    const tab = tabByBrowserId(step.tab);
-    const glyph = tab ? faviconFor(tab, "slot-favicon agent-step-favicon")
-      : h("span", { class: "slot-favicon agent-step-favicon placeholder" }, icon([["path", { class: "agent-star", d: starPath }]]));
-    const row = h("li", { class: "agent-step" },
-      glyph,
-      h("span", { class: "agent-step-copy" },
-        h("span", { class: "agent-step-text" }),
-        h("small", { class: "agent-step-place" })),
-      h("time", { class: "agent-step-time" }));
-    row.stillStep = step;
-    return row;
+  // ------------------------------------------------------- agent gallery
+  // The agent button opens a page of its own over the current one: every
+  // hidden agent tab as a live picture in a grid, each with the agent's
+  // pointer where it last acted and the step it is taking. Click a picture
+  // to bring that tab into your slots, or drag it onto the bar.
+  //
+  // Agent tabs do not pile up: a tab no agent has used for 15 minutes
+  // closes, and so do the tabs of an agent that disconnects (after a
+  // minute, in case it was only reconnecting).
+
+  const GALLERY_STILL_MS = 2400;          // how often a quiet tab's picture refreshes
+  const GALLERY_POINTER_MS = 8000;        // an agent's pointer stays this long after its step
+  const AGENT_TAB_IDLE_MS = 15 * 60 * 1000;
+  const OWNER_GRACE_MS = 60 * 1000;
+  const tiles = new Map();                // tab -> tile
+  const gallery = { timer: 0, clock: 0, cursor: 0, opener: null };
+  const galleryTitle = h("h2", { class: "agent-gallery-title" });
+  const galleryStatus = h("p", { class: "agent-gallery-status" },
+    h("span", { class: "agent-status-light", "aria-hidden": "true" }), h("span", { class: "agent-gallery-status-text" }));
+  const galleryGrid = h("div", { class: "agent-gallery-grid", role: "list", "aria-label": "Agent tabs" });
+  const galleryEmpty = h("p", { class: "agent-gallery-empty", text: "No agent tabs right now. Pages an agent opens show up here, outside your five slots." });
+  const galleryCloseAll = h("button", { type: "button", class: "agent-gallery-action", text: "Close all tabs" });
+  const galleryStop = h("button", { type: "button", class: "agent-gallery-action danger", text: "Stop agent access" });
+  const galleryClose = h("button", { type: "button", class: "agent-gallery-close", title: "Close (Esc)", "aria-label": "Close agent tabs" }, closeGlyph());
+  const galleryLiveSwitch = h("button", { type: "button", class: "agent-gallery-switch", role: "switch", title: "Show a small live picture when the agent works in a tab you are not looking at" },
+    h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" })),
+    h("span", { text: "Live view" }));
+  agentPanel.append(h("div", { class: "agent-gallery-scroll" },
+    h("header", { class: "agent-gallery-head" },
+      h("div", { class: "agent-gallery-heading" }, galleryTitle, galleryStatus),
+      h("div", { class: "agent-gallery-actions" }, galleryLiveSwitch, galleryCloseAll, galleryStop, galleryClose)),
+    galleryGrid, galleryEmpty));
+
+  // Tabs the agent touched get a fresh "last used" time, and remember who.
+  function markAgentUse(activity) {
+    const tab = tabByBrowserId(activity.tab);
+    if (!tab) return;
+    tab.stillAgentUsed = Date.now();
+    tab.stillAgentStep = { label: activity.label, target: activity.target || "", box: activity.box || null, client: activity.client || "", at: Date.now() };
   }
 
-  function updateStepRow(row) {
-    const step = row.stillStep;
-    const text = stepText(step);
-    const textNode = row.querySelector(".agent-step-text");
-    if (textNode.textContent !== text) textNode.textContent = text;
-    const place = stepPlace(step);
-    const placeNode = row.querySelector(".agent-step-place");
-    if (placeNode.textContent !== place) placeNode.textContent = place;
-    const time = ago(step.at);
-    const timeNode = row.querySelector(".agent-step-time");
-    if (timeNode.textContent !== time) timeNode.textContent = time;
-    row.classList.toggle("current", step === agentState.log[0] && Date.now() - step.at < AGENT_WORKING_MS);
+  function closeAgentTabs(tabs) {
+    for (const tab of tabs) if (!tab.closing) gBrowser.removeTab(tab, { animate: false });
   }
 
-  // Rows are kept by identity: new steps slide in at the top, and the rows
-  // already there move down instead of being rebuilt.
-  function renderSteps({ animate = true } = {}) {
-    const steps = agentState.log;
-    const keep = new Set(steps.map((step) => step.id));
-    for (const [id, row] of stepNodes) if (!keep.has(id)) { row.remove(); stepNodes.delete(id); }
-    const before = animate && animationsAllowed() ? new Map([...stepNodes.values()].map((row) => [row, row.offsetTop])) : null;
-    const fresh = [];
-    steps.forEach((step, index) => {
-      let row = stepNodes.get(step.id);
-      if (!row) { row = stepRow(step); stepNodes.set(step.id, row); fresh.push(row); }
-      if (agentSteps.children[index] !== row) agentSteps.insertBefore(row, agentSteps.children[index] || null);
-      updateStepRow(row);
+  // Every minute: hidden agent tabs nobody has used for a while close.
+  state.agentSweep = setInterval(() => {
+    const now = Date.now();
+    closeAgentTabs(agentTabs().filter((tab) => now - (tab.stillAgentUsed || now) > AGENT_TAB_IDLE_MS));
+  }, 60 * 1000);
+  window.addEventListener("unload", () => clearInterval(state.agentSweep));
+
+  // An agent disconnected: once the grace minute passes, the hidden tabs it
+  // opened and has not used since close.
+  function agentOwnerLeft(owner) {
+    if (!owner) return;
+    const left = Date.now();
+    setTimeout(() => {
+      closeAgentTabs(agentTabs().filter((tab) => tab.stillAgentOwner === owner && (tab.stillAgentUsed || 0) <= left));
+    }, OWNER_GRACE_MS);
+  }
+
+  function tileFor(tab) {
+    let tile = tiles.get(tab);
+    if (tile) return tile;
+    const canvas = h("canvas", { class: "agent-tile-canvas" });
+    const ring = h("div", { class: "agent-tile-ring" });
+    const who = h("span", { class: "agent-tile-who" });
+    const pointer = h("div", { class: "agent-tile-pointer" },
+      icon([["path", { class: "agent-pointer-arrow", d: "M4.6 3.4 19.2 11l-6.5 1.7-3.1 6.2Z" }]], "agent-view-arrow"), who);
+    const close = h("button", { type: "button", class: "agent-tile-close", title: "Close tab" }, closeGlyph());
+    const frame = h("div", { class: "agent-tile-frame" }, canvas, ring, pointer);
+    const icon_ = h("span", { class: "agent-tile-icon" });
+    const title = h("span", { class: "agent-tile-title" });
+    const meta = h("span", { class: "agent-tile-meta" });
+    const open = h("button", { type: "button", class: "agent-tile-open" }, frame,
+      h("span", { class: "agent-tile-info" }, icon_, h("span", { class: "agent-tile-copy" }, title, meta)));
+    tile = h("div", { class: "agent-tile", role: "listitem", draggable: "true" }, open, close);
+    Object.assign(tile, { stillTab: tab, stillCanvas: canvas, stillRing: ring, stillPointer: pointer, stillWho: who,
+      stillIcon: icon_, stillTitle: title, stillMeta: meta, stillOpen: open, stillClose: close, stillSize: null, stillShotAt: 0 });
+    open.addEventListener("click", () => { hideAgentPanel(); showAgentTab(tab); });
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const next = tile.nextElementSibling || tile.previousElementSibling;
+      gBrowser.removeTab(tab, { animate: false });
+      (next?.querySelector(".agent-tile-open") || galleryClose).focus({ preventScroll: true });
     });
-    if (!before) return;
-    for (const row of fresh) {
-      row.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
-        { duration: 200, easing: "cubic-bezier(0, 0, .58, 1)" });
-    }
-    for (const [row, top] of before) {
-      const dy = top - row.offsetTop;
-      if (dy) row.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 240, easing: "cubic-bezier(.77, 0, .175, 1)" });
-    }
-  }
-
-  function agentTabRow(tab) {
-    const working = tab === agentWorkingTab();
-    const row = h("div", { class: `agent-tab-row${working ? " working" : ""}`, draggable: "true",
-      title: "Drag into the slots, or click to show it in a slot" });
-    const open = h("div", { role: "button", tabindex: "0", class: "agent-tab-open" },
-      h("span", { class: "agent-tab-icon" }, faviconFor(tab, "slot-favicon agent-tab-favicon")),
-      h("span", { class: "agent-tab-copy" },
-        h("strong", { text: slotTitle(tab) }),
-        h("small", { text: displayUrl(tabUrl(tab)) || "New tab" })));
-    const show = () => { hideAgentPanel(); showAgentTab(tab); };
-    open.addEventListener("click", show);
-    open.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); show(); }
-    });
-    const close = h("button", { type: "button", class: "agent-tab-close", title: "Close", "aria-label": `Close ${slotTitle(tab)}` }, closeGlyph());
-    close.addEventListener("click", () => { gBrowser.removeTab(tab, { animate: false }); renderAgentPanel(); renderAgentChips(); });
-    row.addEventListener("dragstart", (event) => {
-      if (event.target.closest(".agent-tab-close")) { event.preventDefault(); return; }
+    tile.addEventListener("dragstart", (event) => {
+      if (event.target.closest?.(".agent-tile-close")) { event.preventDefault(); return; }
       event.dataTransfer.setData(AGENT_TAB_TYPE, String(tab.linkedBrowser.browserId));
       event.dataTransfer.effectAllowed = "move";
+      try { event.dataTransfer.setDragImage(frame, frame.clientWidth / 2, frame.clientHeight / 2); } catch {}
       state.draggingAgentTab = tab;
-      row.classList.add("dragging");
+      tile.classList.add("dragging");
+      agentPanel.classList.add("dragging");
       showChrome();
     });
-    row.addEventListener("dragend", () => {
+    tile.addEventListener("dragend", () => {
       state.draggingAgentTab = null;
-      row.classList.remove("dragging");
+      tile.classList.remove("dragging");
+      agentPanel.classList.remove("dragging");
       clearDropPreview();
       if (!agentPanel.hidden) renderAgentPanel();
     });
-    row.append(open, close);
-    return row;
+    tiles.set(tab, tile);
+    return tile;
+  }
+
+  function updateTile(tile) {
+    const tab = tile.stillTab;
+    const step = tab.stillAgentStep;
+    const fresh = step && Date.now() - step.at < GALLERY_POINTER_MS;
+    const working = tab === agentWorkingTab();
+    const key = tab.getAttribute("image") || "";
+    if (tile.stillIcon.dataset.key !== key || !tile.stillIcon.firstChild) {
+      tile.stillIcon.dataset.key = key;
+      tile.stillIcon.replaceChildren(faviconFor(tab, "slot-favicon agent-tile-favicon"));
+    }
+    const title = slotTitle(tab);
+    if (tile.stillTitle.textContent !== title) tile.stillTitle.textContent = title;
+    const where = displayUrl(tabUrl(tab)) || "New tab";
+    const meta = fresh ? `${step.client ? `${step.client} · ` : ""}${stepText(step)}`
+      : step ? `${where} · ${ago(step.at)} ago` : where;
+    if (tile.stillMeta.textContent !== meta) tile.stillMeta.textContent = meta;
+    tile.stillOpen.setAttribute("aria-label", `${title}, ${meta}. Show in a slot`);
+    tile.stillClose.setAttribute("aria-label", `Close ${title}`);
+    tile.classList.toggle("working", working);
+    tile.classList.toggle("fresh", Boolean(fresh));
+    placeTilePointer(tile);
+  }
+
+  // The agent's pointer and ring sit where it last acted, scaled to the
+  // picture; without a place it is not shown.
+  function placeTilePointer(tile) {
+    const step = tile.stillTab.stillAgentStep;
+    const size = tile.stillSize;
+    const box = step && Date.now() - step.at < GALLERY_POINTER_MS ? step.box : null;
+    const show = Boolean(box && size);
+    tile.classList.toggle("aiming", show);
+    if (!show) return;
+    const k = tile.stillCanvas.parentNode.clientWidth / size.width;
+    tile.stillRing.style.translate = `${(box.x * k - 2).toFixed(1)}px ${(box.y * k - 2).toFixed(1)}px`;
+    tile.stillRing.style.width = `${Math.max(8, box.width * k + 4).toFixed(1)}px`;
+    tile.stillRing.style.height = `${Math.max(8, box.height * k + 4).toFixed(1)}px`;
+    tile.stillPointer.style.translate = `${((box.x + Math.min(box.width / 2, 28)) * k).toFixed(1)}px ${((box.y + box.height / 2) * k).toFixed(1)}px`;
+    if (tile.stillWho.textContent !== (step.client || "")) tile.stillWho.textContent = step.client || "";
+  }
+
+  async function captureTile(tile) {
+    const tab = tile.stillTab;
+    const global = tab && !tab.closing ? tab.linkedBrowser.browsingContext?.currentWindowGlobal : null;
+    if (!global) return;
+    tile.stillShotAt = performance.now();
+    const reference = gBrowser.selectedBrowser;
+    const width = tab.linkedBrowser.clientWidth || reference.clientWidth || 1280;
+    const height = tab.linkedBrowser.clientHeight || reference.clientHeight || 800;
+    const frameWidth = tile.stillCanvas.parentNode.clientWidth || 320;
+    const scale = Math.min(1, frameWidth * (window.devicePixelRatio || 1) / width);
+    let bitmap;
+    try {
+      bitmap = await global.drawSnapshot(new DOMRect(0, 0, width, Math.min(height, width * 0.625)), scale, "white");
+    } catch {
+      return;
+    }
+    if (!tile.isConnected) { bitmap.close?.(); return; }
+    tile.stillCanvas.width = bitmap.width;
+    tile.stillCanvas.height = bitmap.height;
+    tile.stillCanvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    tile.stillSize = { width, height };
+    tile.classList.add("has-frame");
+    placeTilePointer(tile);
+  }
+
+  // One picture at a time: the tab the agent works in first, then the one
+  // whose picture is oldest. Nothing runs while the gallery is closed.
+  function galleryTick() {
+    gallery.timer = 0;
+    if (agentPanel.hidden) return;
+    const all = [...tiles.values()].filter((tile) => tile.isConnected);
+    const now = performance.now();
+    const due = all.filter((tile) => now - tile.stillShotAt > (tile.classList.contains("working") ? VIEW_FRAME_MS : GALLERY_STILL_MS))
+      .sort((a, b) => (b.classList.contains("working") - a.classList.contains("working")) || a.stillShotAt - b.stillShotAt);
+    const next = due[0];
+    (next ? captureTile(next) : Promise.resolve()).finally(() => {
+      if (!agentPanel.hidden && !gallery.timer) gallery.timer = setTimeout(galleryTick, next ? 60 : 250);
+    });
   }
 
   function renderAgentPanel() {
     const names = agentNames();
     const many = new Set(agentState.clients).size > 1;
+    galleryTitle.textContent = agentState.clients.length ? `${names} ${many ? "are" : "is"} using Still` : "Agent tabs";
+    galleryLiveSwitch.setAttribute("aria-checked", String(agentViewEnabled()));
+    galleryStop.hidden = !agentState.clients.length;
     const tabs = agentTabs();
-    const working = Boolean(agentWorkingTab());
-    const stop = h("button", { type: "button", class: "agent-stop", text: "Stop agent access" });
-    stop.addEventListener("click", () => {
-      hideAgentPanel();
-      lazy.StillAgent.disconnectAll().catch(console.error);
-      showToast("Agent access stopped. Agents can connect again when you start one.");
+    galleryCloseAll.hidden = tabs.length < 2;
+    for (const [tab, tile] of tiles) if (!tabs.includes(tab)) { tile.remove(); tiles.delete(tab); }
+    const fresh = [];
+    tabs.slice().reverse().forEach((tab, index) => {
+      const known = tiles.has(tab);
+      const tile = tileFor(tab);
+      if (!known) fresh.push(tile);
+      if (galleryGrid.children[index] !== tile) galleryGrid.insertBefore(tile, galleryGrid.children[index] || null);
+      updateTile(tile);
     });
-    renderSteps({ animate: false });
-    agentPanel.replaceChildren(
-      h("div", { class: `agent-panel-head${working ? " working" : ""}` },
-        h("strong", { text: `${names} ${many ? "are" : "is"} using Still` }),
-        h("small", { class: "agent-panel-status" },
-          h("span", { class: "agent-status-light", "aria-hidden": "true" }),
-          h("span", { class: "agent-status-text", text: agentStatusText() }))),
-      h("div", { class: "utility-panel-heading", text: tabs.length ? "Agent tabs" : "No agent tabs" }),
-      tabs.length ? h("div", { class: "agent-tab-list" }, ...tabs.map(agentTabRow))
-        : h("p", { class: "agent-panel-note", text: "Pages the agent opens wait here, outside your five slots. It can also work in your slots when you ask." }),
-      agentState.log.length ? h("div", { class: "utility-panel-heading", text: "Steps" }) : null,
-      agentState.log.length ? agentSteps : null,
-      liveViewSwitch(),
-      h("p", { class: "agent-panel-note", text: "Agents use your sign-ins and cookies. They work in their own hidden tabs unless you ask them to use one of your slots." }),
-      stop);
+    galleryEmpty.hidden = tabs.length > 0;
+    if (animationsAllowed() && !agentPanel.classList.contains("opening")) {
+      for (const tile of fresh) {
+        tile.animate([{ opacity: 0, scale: ".96" }, { opacity: 1, scale: "1" }], { duration: 240, easing: "cubic-bezier(0, 0, .58, 1)" });
+      }
+    }
+    refreshAgentPanel();
+    if (!gallery.timer && !agentPanel.hidden) gallery.timer = setTimeout(galleryTick, 0);
   }
 
-  function liveViewSwitch() {
-    const on = agentViewEnabled();
-    const button = h("button", { type: "button", class: "agent-switch-row", role: "switch", "aria-checked": String(on) },
-      h("span", { class: "agent-switch-copy" },
-        h("strong", { text: "Live view" }),
-        h("small", { text: "Watch hidden agent tabs while the agent works in them" })),
-      h("span", { class: "agent-switch", "aria-hidden": "true" }, h("span", { class: "agent-switch-knob" })));
-    button.addEventListener("click", () => {
-      const next = !agentViewEnabled();
-      Services.prefs.setBoolPref(PREF_AGENT_VIEW, next);
-      button.setAttribute("aria-checked", String(next));
-      if (!next) hideAgentView();
-    });
-    return button;
-  }
-
-  // Only what changed while the panel is open: status, current tab, steps.
+  // Only what changes between steps: the status line and each tile's text.
   function refreshAgentPanel() {
     if (agentPanel.hidden) return;
-    const working = agentWorkingTab();
-    agentPanel.querySelector(".agent-panel-head")?.classList.toggle("working", Boolean(working));
-    const status = agentPanel.querySelector(".agent-status-text");
-    if (status) status.textContent = agentStatusText();
-    if (!agentSteps.isConnected && agentState.log.length) { renderAgentPanel(); return; }
-    renderSteps();
+    const working = Boolean(agentWorkingTab());
+    galleryStatus.classList.toggle("working", working);
+    galleryStatus.querySelector(".agent-gallery-status-text").textContent = agentState.clients.length ? agentStatusText() : "No agent connected";
+    for (const tile of tiles.values()) updateTile(tile);
   }
 
   function showAgentPanel({ keyboard = false } = {}) {
     hideUtilityPanel();
-    renderAgentPanel();
+    gallery.opener = document.activeElement;
     agentPanel.hidden = false;
+    agentPanel.classList.add("opening");
+    renderAgentPanel();
+    agentPanel.classList.remove("opening");
+    if (animationsAllowed()) {
+      agentPanel.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: "cubic-bezier(0, 0, .58, 1)" });
+      [...galleryGrid.children].slice(0, 12).forEach((tile, index) => {
+        tile.animate([{ opacity: 0, transform: "translateY(14px) scale(.97)" }, { opacity: 1, transform: "none" }],
+          { duration: 360, delay: 30 + index * 22, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "backwards" });
+      });
+    }
     agentButton.setAttribute("aria-expanded", "true");
     agentButton.classList.add("panel-open");
-    clearInterval(agentState.clockTimer);
-    agentState.clockTimer = setInterval(() => {
-      for (const row of stepNodes.values()) updateStepRow(row);
-      const status = agentPanel.querySelector(".agent-status-text");
-      if (status) status.textContent = agentStatusText();
-    }, 5000);
-    if (keyboard) agentPanel.querySelector("button, [role=button]")?.focus({ preventScroll: true });
+    clearInterval(gallery.clock);
+    gallery.clock = setInterval(refreshAgentPanel, 1000);
+    hideAgentView();
+    // From the keyboard, focus goes to the first picture; with the mouse the
+    // page itself takes it, so Escape works without drawing a focus ring.
+    if (keyboard) (galleryGrid.querySelector(".agent-tile-open") || galleryClose).focus({ preventScroll: true });
+    else agentPanel.focus({ preventScroll: true });
   }
 
   function hideAgentPanel() {
     if (agentPanel.hidden) return;
-    agentPanel.hidden = true;
-    clearInterval(agentState.clockTimer);
+    clearInterval(gallery.clock);
+    clearTimeout(gallery.timer);
+    gallery.timer = 0;
     agentButton.setAttribute("aria-expanded", "false");
     agentButton.classList.remove("panel-open");
+    const done = () => { agentPanel.hidden = true; };
+    if (animationsAllowed()) {
+      agentPanel.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: "cubic-bezier(.42, 0, 1, 1)" }).finished.then(done, done);
+    } else done();
+    if (agentPanel.contains(document.activeElement)) (gallery.opener?.isConnected ? gallery.opener : agentButton).focus({ preventScroll: true });
   }
 
   agentButton.addEventListener("click", (event) => {
     if (agentPanel.hidden) showAgentPanel({ keyboard: event.detail === 0 });
     else hideAgentPanel();
   });
+  galleryClose.addEventListener("click", hideAgentPanel);
+  galleryLiveSwitch.addEventListener("click", () => {
+    const next = !agentViewEnabled();
+    Services.prefs.setBoolPref(PREF_AGENT_VIEW, next);
+    galleryLiveSwitch.setAttribute("aria-checked", String(next));
+    if (!next) hideAgentView();
+  });
+  galleryCloseAll.addEventListener("click", () => {
+    const tabs = agentTabs();
+    closeAgentTabs(tabs);
+    showToast(`${tabs.length} agent tabs closed`, 6000, { label: "Undo", run: () => {
+      state.bypassLimit = true;
+      try { for (let i = 0; i < tabs.length; i++) { const tab = SessionStore.undoCloseTab(window, 0); if (tab) adoptAgentTab(tab); } } finally { state.bypassLimit = false; }
+    } });
+  });
+  galleryStop.addEventListener("click", () => {
+    hideAgentPanel();
+    lazy.StillAgent.disconnectAll().catch(console.error);
+    showToast("Agent access stopped. Agents can connect again when you start one.");
+  });
   agentPanel.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") { event.preventDefault(); hideAgentPanel(); agentButton.focus(); }
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hideAgentPanel(); }
   });
 
-  // The agent's tabs as small icons beside its mark; the one it is working
-  // in carries a ring. Up to three, then a count.
+  // Kept for the places that update the agent's tabs: the gallery, when open.
   function renderAgentChips() {
-    const tabs = agentTabs();
-    const working = agentWorkingTab();
-    const shown = tabs.slice(-3);
-    const key = shown.map((tab) => `${tab.linkedBrowser.browserId}:${tab.getAttribute("image") || ""}:${slotTitle(tab).charAt(0)}`).join("|") + `+${tabs.length}`;
-    if (agentChips.dataset.key !== key) {
-      const old = new Map([...agentChips.children].map((node) => [node.dataset.id, node]));
-      const nodes = shown.map((tab) => {
-        const id = String(tab.linkedBrowser.browserId);
-        const existing = old.get(id);
-        if (existing && existing.dataset.image === (tab.getAttribute("image") || "")) return existing;
-        const chip = h("span", { class: "agent-chip" }, faviconFor(tab, "slot-favicon agent-chip-favicon"));
-        chip.dataset.id = id;
-        chip.dataset.image = tab.getAttribute("image") || "";
-        if (animationsAllowed() && !agentButton.hidden) {
-          chip.animate([{ opacity: 0, scale: ".5" }, { opacity: 1, scale: "1" }], { duration: 260, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
-        }
-        return chip;
-      });
-      if (tabs.length > shown.length) nodes.push(h("span", { class: "agent-chip-more", text: `+${tabs.length - shown.length}` }));
-      agentChips.replaceChildren(...nodes);
-      agentChips.dataset.key = key;
-      agentButton.classList.toggle("has-tabs", tabs.length > 0);
-    }
-    for (const chip of agentChips.querySelectorAll(".agent-chip")) {
-      chip.classList.toggle("working", Boolean(working) && chip.dataset.id === String(working.linkedBrowser.browserId));
-    }
+    if (!agentPanel.hidden) renderAgentPanel();
   }
 
   // While the agent works the mark turns; when it stops, the turn eases on
@@ -3442,7 +3533,7 @@
   }
 
   function showAgentView(tab, activity) {
-    if (!agentViewEnabled() || !tab || tab.closing) return;
+    if (!agentViewEnabled() || !tab || tab.closing || !agentPanel.hidden) return;
     const changed = view.tab !== tab;
     view.tab = tab;
     view.box = activity.box || null;
@@ -3539,7 +3630,7 @@
   agentViewClose.addEventListener("click", () => {
     Services.prefs.setBoolPref(PREF_AGENT_VIEW, false);
     hideAgentView();
-    showToast("Live view is off. You can turn it back on in the agent panel.");
+    showToast("Live view is off. You can turn it back on in the agent gallery.");
     if (!agentPanel.hidden) renderAgentPanel();
   });
 
@@ -3567,6 +3658,7 @@
     if (activity?.label) {
       agentState.activity = { ...activity, at: Date.now() };
       logStep(agentState.activity);
+      markAgentUse(agentState.activity);
       startAgentTurn();
       const tab = tabByBrowserId(activity.tab);
       const onScreen = agentOnScreen(tab);
@@ -3610,6 +3702,7 @@
       try { marked = SessionStore.getCustomTabValue(tab, AGENT_KEY); } catch {}
       if (marked !== "1") continue;
       tab.stillAgent = true;
+      tab.stillAgentUsed = Date.now();
       if (!tab.selected) gBrowser.hideTab(tab);
     }
     renderAgentChips();
@@ -4150,7 +4243,7 @@
     replaySplash: () => runSplash({ force: true }),
     runImport,
     slotIndex,
-    agent: { update: updateAgent, openTab: openAgentTab, showTab: showAgentTab, tabs: agentTabs, onScreen: agentOnScreen }
+    agent: { update: updateAgent, openTab: openAgentTab, showTab: showAgentTab, tabs: agentTabs, onScreen: agentOnScreen, ownerLeft: agentOwnerLeft }
   };
 
   renderSlots();

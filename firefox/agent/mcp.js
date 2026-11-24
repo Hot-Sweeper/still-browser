@@ -15,6 +15,7 @@ How to work:
 - read_page returns the page text (faster than a snapshot for reading mail or articles). screenshot returns an image.
 - Popups (for example "Sign in with Google") open as new tabs or popup windows; they show up in tabs and in the events after an action. Dialogs (alert, confirm, prompt) must be answered with handle_dialog.
 - signed_in_sites tells you where the user is signed in. log_in fills a page's sign-in form from Firefox's saved passwords without revealing them to you; prefer it to asking for passwords.
+- Close the tabs you opened with close_tab as soon as you no longer need them, and when your task is done. Still also closes agent tabs nobody has used for 15 minutes, and the tabs of an agent that disconnects.
 - Be careful with irreversible actions (sending mail, buying, deleting, posting): confirm with the user first unless they clearly asked for it.`;
 
 const FRIENDLY = { 'claude-code': 'Claude Code', claude: 'Claude', codex: 'Codex', 'codex-mcp-client': 'Codex', t3: 'T3 Code', 't3-code': 'T3 Code', cursor: 'Cursor', vscode: 'VS Code' };
@@ -110,7 +111,7 @@ function main() {
       (p) => run('tabs.open', p, (r, c) => afterAction(r, c, p))],
     ['show_tab', 'Bring a tab in front of the user. A hidden agent tab joins the slots (Still asks the user which slot to replace when all five are full). Use when the user needs to see or do something.',
       { tab }, act, (p) => run('tabs.select', p, (r) => text(tabLine(r.tab)))],
-    ['close_tab', 'Close a tab.', { tab }, { ...act, destructiveHint: true }, (p) => run('tabs.close', p, (r) => text(`Closed tab ${r.closed.id}: ${r.closed.title}`))],
+    ['close_tab', 'Close a tab. Close your agent tabs when you are done with them.', { tab }, { ...act, destructiveHint: true }, (p) => run('tabs.close', p, (r) => text(`Closed tab ${r.closed.id}: ${r.closed.title}`))],
     ['navigate', 'Go to an address in a tab, or go back, forward, or reload.',
       { tab, url: z.string().optional(), action: z.enum(['back', 'forward', 'reload']).optional(), ...snapshotOption }, act,
       (p) => run('tabs.navigate', p, (r, c) => afterAction(r, c, p))],

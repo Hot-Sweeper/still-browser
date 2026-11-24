@@ -289,6 +289,8 @@ class BidiClient {
 
 // ------------------------------------------------------- control clients
 
+let connectionCount = 0;
+
 class Connection {
   constructor(bridge, transport) {
     this.bridge = bridge;
@@ -302,6 +304,7 @@ class Connection {
     this.queue = [];
     this.closed = false;
     this.client = "agent";
+    this.id = ++connectionCount;
     this.authorized = !bridge.token;
     this.events = [];
     this.QueryInterface = ChromeUtils.generateQI(["nsIInputStreamCallback", "nsIOutputStreamCallback"]);
@@ -420,6 +423,8 @@ class Bridge {
   dropConnection(connection) {
     this.connections.delete(connection);
     this.updateUi();
+    // Its hidden tabs are no longer needed once it is gone.
+    try { stillWindow()?.StillChrome.agent?.ownerLeft(connection.id); } catch (error) { console.error(error); }
     if (!this.connections.size) {
       clearTimeout(this.idleTimer);
       this.idleTimer = setTimeout(() => { if (!this.connections.size) this.stopEngine(); }, IDLE_STOP_MS);
@@ -453,6 +458,7 @@ class Bridge {
       const handler = METHODS[method];
       if (!handler) throw fail(`Unknown method ${method}`, "unknown_method");
       clearTimeout(this.idleTimer);
+      this.caller = connection;
       const result = await handler.call(this, params, connection);
       const events = connection.events.splice(0);
       connection.send({ id, result, ...(events.length ? { events } : {}) });
@@ -711,7 +717,7 @@ class Bridge {
   // the agent's pointer there when the page is the one in front of you.
   touch(tab, label, { target = "", box = null } = {}) {
     const win = stillWindow();
-    this.updateUi({ tab: tab.linkedBrowser.browserId, label, target, box });
+    this.updateUi({ tab: tab.linkedBrowser.browserId, label, target, box, client: this.caller?.client || "" });
     try { return Boolean(win?.StillChrome.agent?.onScreen(tab)); } catch { return false; }
   }
 
@@ -808,12 +814,12 @@ const METHODS = {
     return { tabs: allTabs().map(describeTab) };
   },
 
-  async "tabs.open"({ url = "about:blank", visible = false, wait = true }) {
+  async "tabs.open"({ url = "about:blank", visible = false, wait = true }, connection) {
     const win = stillWindow();
     if (!win) throw fail("Still has no open window", "no_window");
     // A blank tab first, then a real navigation through the engine, so the
     // page always loads (and we know when) even while Still is starting.
-    const tab = win.StillChrome.agent.openTab("about:blank", { visible });
+    const tab = win.StillChrome.agent.openTab("about:blank", { visible, owner: connection?.id || 0 });
     this.selfOpened.add(tab.linkedBrowser.browserId);
     this.touch(tab, "Opened a tab");
     if (url && url !== "about:blank") {
